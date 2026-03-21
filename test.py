@@ -1,6 +1,9 @@
+import script_builtins
 from datetime import datetime
 from script import *
 import traceback
+
+script_builtins.activate()
 
 
 def test_function(ctx:ScriptContext)->ScriptValue:
@@ -11,7 +14,7 @@ def test_function(ctx:ScriptContext)->ScriptValue:
 
 SCRIPT_FUNCTION_TABLE["test"] = test_function
 
-raw = "x = 1; test(x)"
+raw = "x = 1; y = str(x); z = str(2.3)"
 
 s = Script(raw)
 
@@ -52,4 +55,7 @@ if __name__ == "__main__":
     print("executed:", (eend-estart).total_seconds(), estart, eend)
     print()
     
-    print(s.scope["x"].get().inner)
+    print(s.raw)
+    print(repr(s.scope["x"].get().inner))
+    print(repr(s.scope["y"].get().inner))
+    print(repr(s.scope["z"].get().inner))

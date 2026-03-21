@@ -41,14 +41,31 @@ class ScriptVariable:
 
 class ScriptDataType:
     """The default datatype containing all the default operation behaviors."""
-    
+
     def __init__(self, name:str, inner:type, parent:Self):
         self.name = name
         self.inner = inner
         self.parent = parent
     
+    def isinstance(self, *dts:"ScriptDataType")->bool:
+        c = self
+        while c is not BASE_TYPE:
+            if c in dts:
+                return True
+            c = c.parent
+        return False
+
     def construct(self, ctx:"ScriptContext")->ScriptValue:
         return ScriptValue(self, object())
+    
+    def conv_str(self, value:ScriptValue)->ScriptValue[str]:
+        return self.repr(value)
+
+    def conv_bool(self, value:ScriptValue)->ScriptValue[bool]:
+        return _convert_script_value(bool(value.inner))
+    
+    def repr(self, value:ScriptValue)->ScriptValue[str]:
+        return _convert_script_value(f"<value {self.name} at {hex(id(value))}>")
     
     def lt(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue[bool]|None:
         return wrap_python_value(lhs.get().inner < rhs.get().inner)
@@ -260,12 +277,12 @@ _operator_order_index = {k:i for i, so in enumerate(_operator_order) for k in so
 
 BASE_TYPE = ScriptDataType("object", object, None); BASE_TYPE.parent = BASE_TYPE
 
-data_type_table:dict[type, ScriptDataType] = {
+DATA_TYPE_TABLE:dict[type, ScriptDataType] = {
     object: BASE_TYPE
 }
 
 def _convert_script_value(value):
-    t = data_type_table.get(type(value), None)
+    t = DATA_TYPE_TABLE.get(type(value), None)
     if t is None:
         return None
     return ScriptValue(t, value)
@@ -276,13 +293,13 @@ def wrap_python_value(value):
         t = type(value)
         st = tchain = ScriptDataType(t.__name__, t, None)
         for sup in t.mro():
-            supt = data_type_table.get(sup, None)
+            supt = DATA_TYPE_TABLE.get(sup, None)
             if supt is None:
                 tchain.parent = ScriptDataType(sup.__name__, sup, None)
             else:
                 tchain.parent = supt
                 break
-        data_type_table[t] = st
+        DATA_TYPE_TABLE[t] = st
         v = ScriptValue(st, value)
     return v
 
@@ -467,7 +484,7 @@ class Script:
         if rtv is None:
             self.steps.append(step_cb)
         else:
-            rtv.cb = step_cb()
+            rtv.cb = step_cb
 
     def _get_expression_operations(self, node:ParsingNodeExpression|ParsingNodeParentheses)->_operation_node:
         operators:list[tuple[int, str, ParsingNodeOperator, int]] = []
@@ -591,7 +608,7 @@ class Script:
         elif isinstance(operation, ParsingNodeName):
             return operation
         elif isinstance(operation, ParsingNodeValue):
-            value = wrap_python_value(operation.value) #DEBUG _convert_script_value(operation.value)
+            value = _convert_script_value(operation.value)
             assert value is not None, f"Failed to lookup type for value: {operation} {repr(operation.value)}"
             return value
 
@@ -632,6 +649,8 @@ class Script:
 
 
     def compile(self, tree:ParsingNode):
+        if self.steps:
+            self.steps.clear()
         for node in tree.children:
             if isinstance(node, (ParsingNodeExpression, ParsingNodeParentheses)):
                 self._generate_expression_steps(node)
