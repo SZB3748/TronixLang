@@ -1,5 +1,5 @@
-from script import *
-from exceptions import *
+from .exceptions import *
+from .script import *
 
 def generate_exception_help(raw:str, e:TronixException)->str:
     s = []

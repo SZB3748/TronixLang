@@ -1,4 +1,4 @@
-import parsingnodes
+from .import parsingnodes
 from re import Match
 
 

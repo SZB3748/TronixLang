@@ -1,6 +1,7 @@
-import script_builtins
+from .script import *
+from . import script_builtins
+
 from datetime import datetime
-from script import *
 import traceback
 
 script_builtins.activate()

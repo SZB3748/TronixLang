@@ -1,6 +1,7 @@
-import exceptions
+from .import exceptions
+from .parsingnodes import *
+
 import hashlib
-from parsingnodes import *
 import re
 from typing import Any, Callable, Self
 
