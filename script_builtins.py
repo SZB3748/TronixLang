@@ -1,4 +1,4 @@
-from script import *
+from .script import *
 
 class _FloatType(ScriptDataType):
     def construct(self, ctx)->ScriptValue[float]:
@@ -117,6 +117,6 @@ Bool = _BoolType("bool", bool, BASE_TYPE)
 _builtin_types:set[ScriptDataType] = {Float, Integer, String, Bool}
 
 def activate():
-    import script
+    from . import script
     script.DATA_TYPE_TABLE.update({dt.inner:dt for dt in _builtin_types})
     script.SCRIPT_FUNCTION_TABLE.update({dt.name: dt.construct for dt in _builtin_types})

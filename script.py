@@ -27,6 +27,10 @@ class ScriptValue[T]:
         self.type = value_type
         self.inner = inner
 
+class ScriptValueAwaitable[T](ScriptValue[T]):
+    def __await__(self):
+        yield from self.inner.__await__()
+
 class ScriptVariable:
     def __init__(self, value:ScriptValue):
         self.value = value
