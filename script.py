@@ -52,7 +52,7 @@ class ScriptDataType:
         self.inner = inner
         self.parent = parent
     
-    def isinstance(self, *dts:"ScriptDataType")->bool:
+    def issubtype(self, *dts:"ScriptDataType")->bool:
         c = self
         while c is not BASE_TYPE:
             if c in dts:
@@ -61,7 +61,7 @@ class ScriptDataType:
         return False
 
     def construct(self, ctx:"ScriptContext")->ScriptValue:
-        return ScriptValue(self, object())
+        return ScriptValue(self, self.inner.__new__())
     
     def conv_str(self, value:ScriptValue)->ScriptValue[str]:
         return self.repr(value)
@@ -182,6 +182,55 @@ class ScriptContext:
         self.stack = stack
         self.params = params
 
+class ScriptFunctionParam:
+    def __init__(self, name:str, dtype:ScriptDataType|str, default=None, pack:bool=False):
+        self.name = name
+        self.type = dtype
+        self.default = default
+        self.pack = pack
+
+class ScriptFunctionParamSet:
+    def __init__(self, params:list[ScriptFunctionParam]):
+        self.params = params
+
+    def check(self):
+        got_required_end = False
+        index = None
+        for i, param in enumerate(self.params):
+            if param.default is None or not param.pack:
+                if got_required_end:
+                    ... #TODO error
+            elif not got_required_end:
+                got_required_end = True
+                index = i
+            elif param.pack:
+                ... #TODO error cannot have multiple pack params
+        return len(self.params) if index is None else index
+
+class ScriptFunctionSignature:
+    def __init__(self, overloads:list[ScriptFunctionParamSet]):
+        self.overloads = overloads
+
+    def check(self):
+        ... #make sure no duplicate overloads
+
+    def fit(self, args:list[ScriptVariable])->tuple[int, list[ScriptVariable]]:
+        self.check()
+        for i, overload in enumerate(self.overloads):
+            l = overload.check()
+            if len(args) < l:
+                continue
+
+            #TODO make sure function types align with argument types (make sure to handle packing parameter)
+
+
+class ScriptFunction:
+    def __init__(self, cb:Callable[[ScriptContext], ScriptValue]):
+        self.cb = cb
+
+    def __call__(self, ctx:ScriptContext):
+        return self.cb(ctx)
+
 FunctionTable = dict[str, Callable[[ScriptContext], ScriptValue]]
 
 SCRIPT_FUNCTION_TABLE:FunctionTable = {}
@@ -286,11 +335,22 @@ DATA_TYPE_TABLE:dict[type, ScriptDataType] = {
     object: BASE_TYPE
 }
 
+_name_to_datatype:dict[str, ScriptDataType] = {}
+
 def _convert_script_value(value):
     t = DATA_TYPE_TABLE.get(type(value), None)
     if t is None:
         return None
     return ScriptValue(t, value)
+
+def _map_name_to_type(name:str):
+    t = _name_to_datatype.get(name, None)
+    if t is None:
+        for dt in DATA_TYPE_TABLE.values():
+            _name_to_datatype[dt.name] = dt
+            if dt.name == name:
+                return dt
+    return t
 
 def wrap_python_value(value):
     v = _convert_script_value(value)
