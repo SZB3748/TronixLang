@@ -5,18 +5,22 @@ import hashlib
 import re
 from typing import Any, Callable, Self
 
+KEYWORDS = {"if","else"}
+
 PATTERN_NAME = r"(?:[a-zA-Z_][a-zA-Z0-9_]*)"
 PATTERN_OPERATOR = r"(?:\.|[+\-*\/%=><\!]=?)"
+PATTERN_BOOL_LITERAL = r"(?:true|false)"
 PATTERN_INTEGER_LITERAL = r"(?:[0-9]+)"
 PATTERN_FLOAT_LITERAL = r"(?:[0-9]+\.[0-9]+)"
 PATTERN_STRING_LITERAL_SINGLE = r"(?:f?\'[^\\]*?(?:\\.[^\\]*?)*\')"
 PATTERN_STRING_LITERAL_DOUBLE = r"(?:f?\"[^\\]*?(?:\\.[^\\]*?)*\")"
 PATTERN_STRING_LITERAL = f"(?:{PATTERN_STRING_LITERAL_DOUBLE}|{PATTERN_STRING_LITERAL_SINGLE})"
-PATTERN_LITERAL = f"(?:(?P<value_float>{PATTERN_FLOAT_LITERAL})|(?P<value_integer>{PATTERN_INTEGER_LITERAL})|(?P<value_string>{PATTERN_STRING_LITERAL}))"
-PATTERN_VALUE = f"(?:(?P<value_name>{PATTERN_NAME})|{PATTERN_LITERAL})"
+PATTERN_KEYWORDS = f"(?:{"|".join(KEYWORDS)})"
+PATTERN_LITERAL = f"(?:(?P<value_bool>{PATTERN_BOOL_LITERAL})|(?P<value_float>{PATTERN_FLOAT_LITERAL})|(?P<value_integer>{PATTERN_INTEGER_LITERAL})|(?P<value_string>{PATTERN_STRING_LITERAL}))"
+PATTERN_VALUE = f"(?:{PATTERN_LITERAL}|(?P<value_name>{PATTERN_NAME}))"
 PATTERN_FUNCTION_BEGIN = f"(?:(?P<function_name>{PATTERN_NAME})\\s*\\()"
 #PATTERN_ASSIGN_BEGIN = f"(?:(?P<assign_name>{PATTERN_NAME})\\s*=)"
-PATTERN_MAIN = f"\\s*(?:(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<operator>{PATTERN_OPERATOR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
+PATTERN_MAIN = f"\\s*(?:(?P<keyword>{PATTERN_KEYWORDS})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<operator>{PATTERN_OPERATOR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
 
 RE_MAIN = re.compile(PATTERN_MAIN)
 
@@ -399,6 +403,25 @@ class Script:
         current = root
         enclstack:_enclose_stack|None = None
 
+        def end_condition():
+            nonlocal current
+            if isinstance(current, ParsingNodeConditionPair):
+                if current.condition is not None:
+                    raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
+                elif current.codeblock is None:
+                    if not current.takes_condition:
+                        raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
+                else:
+                    current = current.parent.parent
+
+        def wrap_statement():
+            nonlocal current
+            if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
+                end_condition()
+                exprnode = ParsingNodeExpression(r, current)
+                current.children.append(exprnode)
+                current = exprnode
+
         #build the parse tree
         while True:
             r = RE_MAIN.match(self.raw, pos=i)
@@ -406,11 +429,38 @@ class Script:
                 if self.raw[i:].strip():
                     raise exceptions.TParsingException("unrecognizable syntax", target=(i, None))
                 return root
-            if r["function"] is not None:
-                if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
-                    exprnode = ParsingNodeExpression(r, current)
-                    current.children.append(exprnode)
-                    current = exprnode
+            if (keyword := r["keyword"]) is not None:
+                if keyword == "if":
+                    if isinstance(current, ParsingNodeConditionPair):
+                        if current.condition is None and current.codeblock is None:
+                            current.takes_condition = True
+                            i += r.end() - i
+                            continue
+                        else:
+                            raise exceptions.TUnexpectedKeyword("keyword \"if\" not expected here", target=(i, r))
+                    if isinstance(current, ParsingNodeExpression):
+                        current = current.parent
+                    if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
+                        raise exceptions.TUnexpectedKeyword("keyword \"if\" not expected here", target=(i, r))
+                    node = ParsingNodeIfStatement(r, current)
+                    cond = ParsingNodeConditionPair(r, node, takes_condition=True)
+                    node.children.append(cond)
+                    current.children.append(node)
+                    current = cond
+                elif keyword == "else":
+                    while current is not None:
+                        if isinstance(current, ParsingNodeConditionPair):
+                            break
+                        current = current.parent
+                    if current is None or current.condition is None or current.codeblock is None:
+                        raise exceptions.TUnexpectedKeyword("keyword \"else\" not expected here", target=(i, r))
+                    current = current.parent
+                    cond = ParsingNodeConditionPair(r, current)
+                    current.children.append(cond)
+                    current = cond
+                i += r.end() - i
+            elif r["function"] is not None:
+                wrap_statement()
                 node = ParsingNodeFunction(r["function_name"], r, current)
                 current.children.append(node)
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
@@ -421,10 +471,8 @@ class Script:
                 v_string = r["value_string"]
                 v_integer = r["value_integer"]
                 v_float = r["value_float"]
-                if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
-                    exprnode = ParsingNodeExpression(r, current)
-                    current.children.append(exprnode)
-                    current = exprnode
+                v_bool = r["value_bool"]
+                wrap_statement()
                 if v_name:
                     node = ParsingNodeName(v_name, r, current)
                 else:
@@ -462,24 +510,20 @@ class Script:
                         value = int(v_integer)
                     elif v_float:
                         value = float(v_float)
+                    elif v_bool:
+                        value = v_bool == "true"
                     else:
                         raise exceptions.TUnknownValue(f"unknown value", target=(i, r))
                     node = ParsingNodeValue(value, r, current)
                 current.children.append(node)
                 i += r.end() - i
             elif (operator := r["operator"]) is not None:
-                if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
-                    exprnode = ParsingNodeExpression(r, current)
-                    current.children.append(exprnode)
-                    current = exprnode
+                wrap_statement()
                 node = ParsingNodeOperator(operator, r, current)
                 current.children.append(node)
                 i += r.end() - i
             elif r["parenthesis"] is not None:
-                if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
-                    exprnode = ParsingNodeExpression(r, current)
-                    current.children.append(exprnode)
-                    current = exprnode
+                end_condition()
                 node = ParsingNodeParentheses(r, current)
                 current.children.append(node)
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
@@ -487,7 +531,14 @@ class Script:
                 i += r.end() - i
             elif r["codeblock"] is not None:
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
-                    raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
+                    raise exceptions.TUnexpectedSymbol("{ unexpected here", target=(i, r))
+                if isinstance(current, ParsingNodeExpression):
+                    current = current.parent
+                if isinstance(current, ParsingNodeConditionPair):
+                    if current.takes_condition and current.condition is None:
+                        raise exceptions.TExpectedEvaluable("expected evaluable expression as if statement condition but got code block instead", target=(i, r))
+                    elif current.codeblock is not None:
+                        current = current.parent.parent
                 node = ParsingNodeCodeBlock(r, current)
                 current.children.append(node)
                 enclstack = _enclose_stack("{","}", node, current, enclstack)
@@ -512,14 +563,16 @@ class Script:
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
                 while current is not None:
-                    current = current.parent
-                    if isinstance(current, ParsingNodeCodeBlock):
+                    if isinstance(current, (ParsingNodeCodeBlock, ParsingNodeIfStatement)):
                         break
+                    current = current.parent
                 else:
                     current = root
                 i += r.end() - i
             elif enclstack is not None:
-                raise exceptions.TExpectedSymbol("expected here", target=(i, r))
+                raise exceptions.TExpectedSymbol(f"{enclstack.end} expected here", target=(i, r))
+            elif isinstance(current, ParsingNodeConditionPair) and current.codeblock is None:
+                raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
             else:
                 return root
 
@@ -743,6 +796,40 @@ class Script:
             else:
                 raise exceptions.TInvalidParameter("failed to evaluate parameter", node)
 
+    def _generate_if_statement_steps(self, node:ParsingNodeIfStatement, rtv:_step_evaluation|None=None):
+        pairs:list[tuple[_step_evaluation,Callable[[], _step_expansion]]] = []
+        last:Callable[[],_step_expansion] = None
+
+        for pair in node.children:
+            assert isinstance(pair, ParsingNodeConditionPair), f"if statement child is not condition pair: {pair}"
+            assert pair.codeblock is not None, f"if statement missing code block"
+            if pair.condition is None:
+                if last is None:
+                    last = _step_evaluation()
+                    self._generate_codeblock_steps(pair.codeblock, last)
+                else:
+                    raise exceptions.TIncorrectIfStatement("else if cannot come after if")
+            else:
+                condition_cb, block_cb = cbpair = _step_evaluation(), _step_evaluation()
+                self._generate_expression_steps(pair.condition, condition_cb)
+                self._generate_codeblock_steps(pair.codeblock, block_cb)
+                pairs.append(cbpair)
+        
+        def _step():
+            for condition_cb, block_cb in pairs:
+                v = condition_cb()
+                if not isinstance(v, ScriptValue):
+                    raise exceptions.TMustEvaluate("if statement condition must evaluate but resulted in no value")
+                if v.type.conv_bool(v).inner:
+                    return block_cb()
+            return last()
+
+        if rtv is None:
+            self.steps.append(_step)
+        else:
+            rtv.cb = _step
+
+
     def _generate_codeblock_steps(self, node:ParsingNodeCodeBlock, rtv:_step_evaluation|None=None):
         if rtv is None:
             steps = self.steps
@@ -760,8 +847,11 @@ class Script:
             elif isinstance(child, ParsingNodeFunction):
                 self._generate_function_steps(child, srtv)
             elif isinstance(child, ParsingNodeCodeBlock):
-                srtv = _step_evaluation()
+                if srtv is None:
+                    srtv = _step_evaluation()
                 self._generate_codeblock_steps(child, srtv)
+            elif isinstance(child, ParsingNodeIfStatement):
+                self._generate_if_statement_steps(child, srtv)
 
             if srtv:
                 steps.append(srtv)
@@ -892,7 +982,6 @@ def _generate_sub_steps(script:Script, lh, rh):
         r = _resolve_h(script, rh)
         try:
             x = l.type().sub(l, r)
-            print(l.get().inner, "-", r.get().inner, "->", x.inner)
         except NotImplementedError as e:
             raise exceptions.TNotImplemented("operation is not implemented") from e
         except Exception as e:
@@ -915,7 +1004,6 @@ def _generate_mlt_steps(script:Script, lh, rh):
         r = _resolve_h(script, rh)
         try:
             x = l.type().mlt(l, r)
-            print(l.get().inner, "*", r.get().inner, "->", x.inner)
         except NotImplementedError as e:
             raise exceptions.TNotImplemented("operation is not implemented") from e
         except Exception as e:
@@ -1156,7 +1244,6 @@ def _generate_usub_steps(script:Script, lh, rh):
         h = _resolve_h(script, rh)
         try:
             x = h.type().usub(h)
-            print("-", h.get().inner, "->", x.inner)
         except NotImplementedError as e:
             raise exceptions.TNotImplemented("operation is not implemented") from e
         except Exception as e:
@@ -1273,6 +1360,48 @@ def _generate_le_steps(script:Script, lh, rh):
         return x
     return _step
 
+def _generate_eq_steps(script:Script, lh, rh):
+    if not _validate_h(lh):
+        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
+    elif not _validate_h(rh):
+        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
+    def _step():
+        l = _resolve_h(script, lh)
+        r = _resolve_h(script, rh)
+        try:
+            x = l.type().eq(l, r)
+        except NotImplementedError as e:
+            raise exceptions.TNotImplemented("operation is not implemented") from e
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if x is None:
+            raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
+        elif x is NotImplemented:
+            raise exceptions.TNotImplemented("operation is not implemented")
+        return x
+    return _step
+
+def _generate_ne_steps(script:Script, lh, rh):
+    if not _validate_h(lh):
+        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
+    elif not _validate_h(rh):
+        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
+    def _step():
+        l = _resolve_h(script, lh)
+        r = _resolve_h(script, rh)
+        try:
+            x = l.type().ne(l, r)
+        except NotImplementedError as e:
+            raise exceptions.TNotImplemented("operation is not implemented") from e
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if x is None:
+            raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
+        elif x is NotImplemented:
+            raise exceptions.TNotImplemented("operation is not implemented")
+        return x
+    return _step
+
 
 
 _operator_step_generators:dict[str, Callable[[Script, Any, Any], _variable_access|ScriptValue]] = {
@@ -1289,6 +1418,8 @@ _operator_step_generators:dict[str, Callable[[Script, Any, Any], _variable_acces
     "<": _generate_lt_steps,
     ">=": _generate_ge_steps,
     "<=": _generate_le_steps,
+    "==": _generate_eq_steps,
+    "!=": _generate_ne_steps,
     "=": _generate_assign_steps,
     "+=": _generate_iadd_steps,
     "-=": _generate_isub_steps,

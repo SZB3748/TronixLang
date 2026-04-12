@@ -23,14 +23,17 @@ SCRIPT_FUNCTION_TABLE["test"] = test_function
 SCRIPT_FUNCTION_TABLE["test_async"] = test_async
 
 raw = r"""
-x = 'hello';
-y = 'world';
-{
-    x = 'evil';
-    "z = ' doesn\'t exist'"
+x = 1 + 1
+if x > 1 {
+    if true {
+    test_async(str(x) + " > 1")
+    }
+} else if (x == 1) { test_async(str(x) + " == 1") }
+else {
+    test_async(str(x) + " < 1")
 }
 
-test_async(x + ' ' + y)
+test_async("test")
 
 """
 

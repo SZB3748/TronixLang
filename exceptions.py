@@ -46,6 +46,15 @@ class TUnexpectedSymbol(TParsingException):
 class TExpectedSymbol(TParsingException):
     "Symbol was expected here."
 
+class TUnexpectedKeyword(TParsingException):
+    "Keyword was not expected here."
+
+class TExpectedKeyword(TParsingException):
+    "Keyword was expected here."
+
+class TExpectedEvaluable(TParsingException):
+    "Evaluable expression was expected here."
+
 
 
 class TCompilationException(TronixException):
@@ -66,6 +75,9 @@ class TIncorrectOperandOrder(TCompilationException):
 
 class TInvalidOperand(TCompilationException):
     "Operand is of invalid node type."
+
+class TIncorrectIfStatement(TCompilationException):
+    "Order of ifs/else ifs/elses is incorrect."
 
 
 

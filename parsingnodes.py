@@ -14,9 +14,9 @@ class ParsingNode_Terminating(ParsingNode):
 class ParsingNodeExpression(ParsingNode):
     pass
 
-class ParsingNodeName(ParsingNode):
-    def __init__(self, name:str, match:Match, parent:ParsingNode|None=None, children:list[ParsingNode]|None=None):
-        super().__init__(match, parent, children)
+class ParsingNodeName(ParsingNode_Terminating):
+    def __init__(self, name:str, match:Match, parent:ParsingNode|None=None):
+        super().__init__(match, parent)
         self.name = name
 
 class ParsingNodeFunction(ParsingNode):
@@ -42,3 +42,42 @@ class ParsingNodeOperator(ParsingNode_Terminating):
     def __init__(self, operator:str, match:Match, parent:ParsingNode|None=None):
         super().__init__(match, parent)
         self.operator = operator
+
+class ParsingNodeIfStatement(ParsingNode):
+    pass
+
+class ParsingNodeConditionPair(ParsingNode):
+    def __init__(self, match:Match, parent:ParsingNodeIfStatement|None, condition:ParsingNodeExpression|ParsingNodeParentheses|None=None, codeblock:ParsingNodeCodeBlock|None=None, takes_condition:bool=False):
+        super().__init__(match, parent, [])
+        self.takes_condition = takes_condition
+    
+    @property
+    def condition(self)->ParsingNodeExpression|ParsingNodeParentheses|None:
+        if self.takes_condition and len(self.children) > 0:
+            return self.children[0]
+        else:
+            return None
+    
+    @condition.setter
+    def condition(self, value:ParsingNodeExpression|ParsingNodeParentheses|None):
+        if self.takes_condition:
+            if self.children:
+                self.children[0] = value
+            else:
+                self.children.append(value)
+    
+    @property
+    def codeblock(self)->ParsingNodeCodeBlock|None:
+        i = bool(self.takes_condition)
+        if len(self.children) > i:
+            return self.children[i]
+        else:
+            return None
+    
+    @codeblock.setter
+    def codeblock(self, value:ParsingNodeCodeBlock|None):
+        i = bool(self.takes_condition)
+        if len(self.children) > i:
+            self.children[bool(self.takes_condition)] = value
+        else:
+            self.children.append(value)
