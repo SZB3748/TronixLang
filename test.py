@@ -1,11 +1,10 @@
 from .script import *
 from . import script_builtins, utils
 
-from datetime import datetime
+import time
 import traceback
 
 script_builtins.activate()
-
 
 def test_function(ctx:ScriptContext)->ScriptValue:
     x = ctx.params[0]
@@ -23,12 +22,22 @@ def test_async(ctx:ScriptContext):
 SCRIPT_FUNCTION_TABLE["test"] = test_function
 SCRIPT_FUNCTION_TABLE["test_async"] = test_async
 
-raw = "x = 'hello'; test_async(x)"
+raw = r"""
+x = 'hello';
+y = 'world';
+{
+    x = 'evil';
+    "z = ' doesn\'t exist'"
+}
+
+test_async(x + ' ' + y)
+
+"""
 
 s = Script(raw)
 
 print("parsing")
-pstart = datetime.now()
+pstart = time.perf_counter_ns()
 try:
     p = s.parse()
 except exceptions.TParsingException as e:
@@ -38,35 +47,39 @@ except exceptions.TParsingException as e:
         if i is None:
             span = raw
         else:
-            span = raw[i]
+            span = raw[i-10:i+10]
     else:
         span = raw[i+m.start():i+m.end()]
     print("position", i)
-    print(span)
+    print(repr(span))
     print(f"{type(e).__name__}: {e}")
     exit(-1)
-pend = datetime.now()
+pend = time.perf_counter_ns()
 
-print("parsed:", (pend-pstart).total_seconds(), pstart, pend)
+print("parsed:", pend-pstart, pstart, pend)
 
 runner = utils.ScriptRunner()
+
+async def run_func(runner:utils.ScriptRunner, s:Script):
+    estart = time.perf_counter_ns()
+    await runner.run_async(s)
+    eend = time.perf_counter_ns()
+    print("executed:", eend - estart, estart, eend)
+    print()
 
 if __name__ == "__main__":
     import asyncio
     print("\ncompiling")
-    cstart = datetime.now()
+    cstart = time.perf_counter_ns()
     s.compile(p)
-    cend = datetime.now()
-    print("compiled:", (cend-cstart).total_seconds(), cstart, cend)
+    cend = time.perf_counter_ns()
+    print("compiled:", cend - cstart, cstart, cend)
 
 
     print("\nexecuting")
     runner.parse_trees[s._hash] = p
-    estart = datetime.now()
-    asyncio.run(runner.run_async(s))
-    eend = datetime.now()
-    print("executed:", (eend-estart).total_seconds(), estart, eend)
-    print()
+    
+    asyncio.run(run_func(runner, s))
     
     print(s.raw)
     # print(repr(s.scope["x"].get().inner))

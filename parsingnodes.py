@@ -32,6 +32,9 @@ class ParsingNodeValue(ParsingNode_Terminating):
 class ParsingNodeParentheses(ParsingNode):
     pass
 
+class ParsingNodeCodeBlock(ParsingNode):
+    pass
+
 class ParsingNodeComma(ParsingNode_Terminating):
     pass
 

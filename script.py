@@ -16,7 +16,7 @@ PATTERN_LITERAL = f"(?:(?P<value_float>{PATTERN_FLOAT_LITERAL})|(?P<value_intege
 PATTERN_VALUE = f"(?:(?P<value_name>{PATTERN_NAME})|{PATTERN_LITERAL})"
 PATTERN_FUNCTION_BEGIN = f"(?:(?P<function_name>{PATTERN_NAME})\\s*\\()"
 #PATTERN_ASSIGN_BEGIN = f"(?:(?P<assign_name>{PATTERN_NAME})\\s*=)"
-PATTERN_MAIN = f"\\s*(?:(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<operator>{PATTERN_OPERATOR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<enclend>[\\]\\)]))"
+PATTERN_MAIN = f"\\s*(?:(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<operator>{PATTERN_OPERATOR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
 
 RE_MAIN = re.compile(PATTERN_MAIN)
 
@@ -284,7 +284,7 @@ class _variable_access:
         return target
 
 class _step_evaluation:
-    def __init__(self, cb:Callable[[], Any]=None):
+    def __init__(self, cb:Callable[[],Any]=None):
         self.cb = cb
 
     def __call__(self):
@@ -292,6 +292,14 @@ class _step_evaluation:
     
     def __bool__(self):
         return self.cb is not None
+    
+class _step_expansion:
+    def __init__(self, steps:list[Callable[[],Any]], new_ns_stackframe:bool=True):
+        self.steps = steps
+        self.new_ns_stackframe = new_ns_stackframe
+
+    def __iter__(self):
+        yield from self.steps
 
 _escape_character_mapping = {
     "n": "\n",
@@ -356,27 +364,33 @@ def wrap_python_value(value):
     v = _convert_script_value(value)
     if v is None:
         t = type(value)
-        st = tchain = ScriptDataType(t.__name__, t, None)
-        for sup in t.mro():
-            supt = DATA_TYPE_TABLE.get(sup, None)
-            if supt is None:
-                tchain.parent = ScriptDataType(sup.__name__, sup, None)
-            else:
-                tchain.parent = supt
-                break
+        st = wrap_python_type(t)
         DATA_TYPE_TABLE[t] = st
         v = ScriptValue(st, value)
     return v
 
+def wrap_python_type(t:type):
+    st = tchain = ScriptDataType(t.__name__, t, None)
+    for sup in t.mro():
+        supt = DATA_TYPE_TABLE.get(sup, None)
+        if supt is None:
+            tchain.parent = ScriptDataType(sup.__name__, sup, None)
+        else:
+            tchain.parent = supt
+            break
+    return st
 
 class Script:
+
+    HASH_FUNC = hashlib.md5
+
     def __init__(self, raw:str, scope:Namespace=None, global_scope:Namespace=SCRIPT_GLOBAL_SCOPE, function_table:FunctionTable=SCRIPT_FUNCTION_TABLE):
         self.raw = raw
-        self._hash = hashlib.md5(raw.encode("utf-8"), usedforsecurity=False).digest()
+        self._hash = self.HASH_FUNC(raw.encode("utf-8"), usedforsecurity=False).digest()
         self.scope = {} if scope is None else scope
         self.global_scope = global_scope
         self.function_table = function_table
-        self.steps:list[Callable[[]]] = []
+        self.steps:list[Callable[[],Any]] = []
         self.stack = ns_stack(self.scope, ns_stack(global_scope))
     
     def parse(self)->ParsingNode:
@@ -387,10 +401,9 @@ class Script:
 
         #build the parse tree
         while True:
-            _s = self.raw[i:]
-            r = RE_MAIN.match(_s)
+            r = RE_MAIN.match(self.raw, pos=i)
             if r is None:
-                if _s.strip():
+                if self.raw[i:].strip():
                     raise exceptions.TParsingException("unrecognizable syntax", target=(i, None))
                 return root
             if r["function"] is not None:
@@ -402,7 +415,7 @@ class Script:
                 current.children.append(node)
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
                 current = node
-                i += r.end()
+                i += r.end() - i
             elif r["value"] is not None:
                 v_name = r["value_name"]
                 v_string = r["value_string"]
@@ -453,7 +466,7 @@ class Script:
                         raise exceptions.TUnknownValue(f"unknown value", target=(i, r))
                     node = ParsingNodeValue(value, r, current)
                 current.children.append(node)
-                i += r.end()
+                i += r.end() - i
             elif (operator := r["operator"]) is not None:
                 if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
                     exprnode = ParsingNodeExpression(r, current)
@@ -461,7 +474,7 @@ class Script:
                     current = exprnode
                 node = ParsingNodeOperator(operator, r, current)
                 current.children.append(node)
-                i += r.end()
+                i += r.end() - i
             elif r["parenthesis"] is not None:
                 if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
                     exprnode = ParsingNodeExpression(r, current)
@@ -471,7 +484,15 @@ class Script:
                 current.children.append(node)
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
                 current = node
-                i += r.end()
+                i += r.end() - i
+            elif r["codeblock"] is not None:
+                if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
+                    raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
+                node = ParsingNodeCodeBlock(r, current)
+                current.children.append(node)
+                enclstack = _enclose_stack("{","}", node, current, enclstack)
+                current = node
+                i += r.end() - i
             elif (enclend := r["enclend"]) is not None:
                 if enclstack is None:
                     raise exceptions.TEnclMismatch(f"unmatched {enclend}", target=(i, r))
@@ -479,7 +500,7 @@ class Script:
                     raise exceptions.TEnclMismatch(f"closing {enclend} does not match opening {enclstack.c}", target=(i, r))
                 current = enclstack.basenode
                 enclstack = enclstack.prev
-                i += r.end()
+                i += r.end() - i
             elif r["comma"] is not None:
                 if enclstack is not None:
                     if isinstance(enclstack.pnode, ParsingNodeFunction):
@@ -488,11 +509,15 @@ class Script:
                         continue
                 raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
             elif r["semicolon"] is not None:
-                if enclstack is not None: #NOTE: if adding code blocks, allow code blocks to contain semicolons (enclstack.pnode isinstance check)
+                if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
-                if isinstance(current, ParsingNodeExpression):
-                    current = root #NOTE: this only works if code blocks dont exist, the semicolon must bring current to the nearest code block (or default to root)
-                i += r.end()
+                while current is not None:
+                    current = current.parent
+                    if isinstance(current, ParsingNodeCodeBlock):
+                        break
+                else:
+                    current = root
+                i += r.end() - i
             elif enclstack is not None:
                 raise exceptions.TExpectedSymbol("expected here", target=(i, r))
             else:
@@ -679,18 +704,22 @@ class Script:
 
     def _generate_expression_steps(self, node:ParsingNodeExpression|ParsingNodeParentheses, rtv:_step_evaluation|None=None):
         operation_tree = self._get_expression_operations(node)
+        def _resolve_name(n:ParsingNodeName):
+            def _step():
+                ns = self.stack.find_name(n.name)
+                if ns is None:
+                    raise exceptions.TMissingName(f"{repr(n.name)} not found")
+                return ns[n.name]
+            return _step
+        def _resolve_value(v:ScriptValue):
+            def _step():
+                return v
+            return _step
         if operation_tree is None:
             child = node.children[0]
             if isinstance(child, ParsingNodeFunction):
                 self._generate_function_steps(child, rtv)
             elif isinstance(child, ParsingNodeName):
-                def _resolve_name(n:ParsingNodeName):
-                    def _step():
-                        ns = self.stack.find_name(n.name)
-                        if ns is None:
-                            raise exceptions.TMissingName(f"{repr(n.name)} not found")
-                        return ns[n.name]
-                    return _step
                 if rtv is not None:
                     rtv.cb = _resolve_name(child)
             elif isinstance(child, ParsingNodeValue):
@@ -706,21 +735,48 @@ class Script:
                 else:
                     rtv.cb = os.cb
             elif isinstance(os, ParsingNodeName):
-                ...
+                if rtv is not None:
+                    rtv.cb = _resolve_name(os)
             elif isinstance(os, ScriptValue):
-                ...
+                if rtv is not None:
+                    rtv.cb = _resolve_value(os)
             else:
                 raise exceptions.TInvalidParameter("failed to evaluate parameter", node)
 
+    def _generate_codeblock_steps(self, node:ParsingNodeCodeBlock, rtv:_step_evaluation|None=None):
+        if rtv is None:
+            steps = self.steps
+        else:
+            steps = []
+
+        for child in node.children:
+            if rtv is None:
+                srtv = None
+            else:
+                srtv = _step_evaluation()
+            
+            if isinstance(child, (ParsingNodeExpression, ParsingNodeParentheses)):
+                self._generate_expression_steps(child, srtv)
+            elif isinstance(child, ParsingNodeFunction):
+                self._generate_function_steps(child, srtv)
+            elif isinstance(child, ParsingNodeCodeBlock):
+                srtv = _step_evaluation()
+                self._generate_codeblock_steps(child, srtv)
+
+            if srtv:
+                steps.append(srtv)
+        
+        if rtv is not None:
+            expansion = _step_expansion(steps)
+            def _step():
+                return expansion
+
+            rtv.cb = _step
 
     def compile(self, tree:ParsingNode):
         if self.steps:
             self.steps.clear()
-        for node in tree.children:
-            if isinstance(node, (ParsingNodeExpression, ParsingNodeParentheses)):
-                self._generate_expression_steps(node)
-            elif isinstance(node, ParsingNodeFunction):
-                self._generate_function_steps(node)
+        self._generate_codeblock_steps(tree)
 
 
 def _validate_h(h):
@@ -1219,7 +1275,7 @@ def _generate_le_steps(script:Script, lh, rh):
 
 
 
-_operator_step_generators:dict[str, Callable[[Script, Any, Any], Callable[[], _variable_access|ScriptValue]]] = {
+_operator_step_generators:dict[str, Callable[[Script, Any, Any], _variable_access|ScriptValue]] = {
     ".": _generate_dot_steps,
     "-u": _generate_usub_steps,
     "+u": _generate_uadd_steps,
