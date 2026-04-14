@@ -1,5 +1,6 @@
 from . import exceptions, script
 from .script import *
+from .utils import ScriptFunction, ScriptFunctionParam
 
 import string
 
