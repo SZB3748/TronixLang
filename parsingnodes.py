@@ -50,6 +50,8 @@ class ParsingNodeConditionPair(ParsingNode):
     def __init__(self, match:Match, parent:ParsingNodeIfStatement|None, condition:ParsingNodeExpression|ParsingNodeParentheses|None=None, codeblock:ParsingNodeCodeBlock|None=None, takes_condition:bool=False):
         super().__init__(match, parent, [])
         self.takes_condition = takes_condition
+        self.condition = condition
+        self.codeblock = codeblock
     
     @property
     def condition(self)->ParsingNodeExpression|ParsingNodeParentheses|None:
@@ -79,5 +81,65 @@ class ParsingNodeConditionPair(ParsingNode):
         i = bool(self.takes_condition)
         if len(self.children) > i:
             self.children[bool(self.takes_condition)] = value
+        else:
+            if i-1 >= len(self.children):
+                self.children.append(None)
+            self.children.append(value)
+
+class ParsingNodeNVPair(ParsingNode):
+    def __init__(self, match:Match, parent:ParsingNode|None=None, name:ParsingNodeName|None=None, value:ParsingNodeExpression|ParsingNodeParentheses|None=None):
+        super().__init__(match, parent, [])
+        if name is not None:
+            self.name = name
+        if value is not None:
+            self.value = value
+
+    @property
+    def name(self)->ParsingNodeName|None:
+        if self.children:
+            return self.children[0]
+        else:
+            return None
+    
+    @name.setter
+    def name(self, value:ParsingNodeName|None):
+        if self.children:
+            self.children[0] = value
+        else:
+            self.children.append(value)
+    
+    @property
+    def value(self)->ParsingNodeExpression|ParsingNodeParentheses|None:
+        if len(self.children) > 1:
+            return self.children[1]
+        else:
+            return None
+    
+    @value.setter
+    def value(self, value:ParsingNodeExpression|ParsingNodeParentheses|None):
+        if len(self.children) > 1:
+            self.children[1] = value
+        else:
+            if not self.children:
+                self.children.append(None)
+            self.children.append(value)
+
+class ParsingNodeGlobalStatement(ParsingNode):
+    def __init__(self, match:Match, parent:ParsingNode|None=None, name:ParsingNodeName|None=None):
+        super().__init__(match, parent, [])
+        if name is not None:
+            self.children.append(name)
+
+    @property
+    def name(self)->ParsingNodeName|None:
+        if self.children:
+            return self.children[0]
+        else:
+            return None
+    
+    @name.setter
+    def name(self, value:ParsingNodeName|None):
+        if self.children:
+            self.children[0] = value
         else:
             self.children.append(value)

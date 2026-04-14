@@ -5,29 +5,29 @@ import hashlib
 import re
 from typing import Any, Callable, Self
 
-KEYWORDS = {"if","else"}
+KEYWORDS = {"if","else","global"}
 
 PATTERN_NAME = r"(?:[a-zA-Z_][a-zA-Z0-9_]*)"
 PATTERN_OPERATOR = r"(?:\.|[+\-*\/%=><\!]=?)"
-PATTERN_BOOL_LITERAL = r"(?:true|false)"
 PATTERN_INTEGER_LITERAL = r"(?:[0-9]+)"
 PATTERN_FLOAT_LITERAL = r"(?:[0-9]+\.[0-9]+)"
 PATTERN_STRING_LITERAL_SINGLE = r"(?:f?\'[^\\]*?(?:\\.[^\\]*?)*\')"
 PATTERN_STRING_LITERAL_DOUBLE = r"(?:f?\"[^\\]*?(?:\\.[^\\]*?)*\")"
 PATTERN_STRING_LITERAL = f"(?:{PATTERN_STRING_LITERAL_DOUBLE}|{PATTERN_STRING_LITERAL_SINGLE})"
 PATTERN_KEYWORDS = f"(?:{"|".join(KEYWORDS)})"
-PATTERN_LITERAL = f"(?:(?P<value_bool>{PATTERN_BOOL_LITERAL})|(?P<value_float>{PATTERN_FLOAT_LITERAL})|(?P<value_integer>{PATTERN_INTEGER_LITERAL})|(?P<value_string>{PATTERN_STRING_LITERAL}))"
+PATTERN_LITERAL = f"(?:(?P<value_null>null)|(?P<value_bool>true|false)|(?P<value_float>{PATTERN_FLOAT_LITERAL})|(?P<value_integer>{PATTERN_INTEGER_LITERAL})|(?P<value_string>{PATTERN_STRING_LITERAL}))"
 PATTERN_VALUE = f"(?:{PATTERN_LITERAL}|(?P<value_name>{PATTERN_NAME}))"
+PATTERN_NAME_VALUE_PAIR = f"(?:(?P<name_value_pair_name>{PATTERN_NAME})\\s*:)"
 PATTERN_FUNCTION_BEGIN = f"(?:(?P<function_name>{PATTERN_NAME})\\s*\\()"
 #PATTERN_ASSIGN_BEGIN = f"(?:(?P<assign_name>{PATTERN_NAME})\\s*=)"
-PATTERN_MAIN = f"\\s*(?:(?P<keyword>{PATTERN_KEYWORDS})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<operator>{PATTERN_OPERATOR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
+PATTERN_MAIN = f"\\s*(?:(?P<keyword>{PATTERN_KEYWORDS})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<operator>{PATTERN_OPERATOR})|(?P<name_value_pair>{PATTERN_NAME_VALUE_PAIR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
 
 RE_MAIN = re.compile(PATTERN_MAIN)
 
 # max told me to call this language Tronix, i'll think abt it 
 
 class ScriptValue[T]:
-    def __init__(self, value_type:"ScriptDataType", inner:T):
+    def __init__(self, value_type:"ScriptDataType[T]", inner:T):
         self.type = value_type
         self.inner = inner
 
@@ -35,29 +35,31 @@ class ScriptValueAwaitable[T](ScriptValue[T]):
     def __await__(self):
         yield from self.inner.__await__()
 
-class ScriptVariable:
-    def __init__(self, value:ScriptValue):
+class ScriptVariable[T]:
+    def __init__(self, value:ScriptValue[T]):
         self.value = value
     
     def type(self):
         return self.value.type
 
-    def get(self)->ScriptValue:
+    def get(self)->ScriptValue[T]:
         return self.value
     
-    def assign(self, value:ScriptValue):
+    def assign(self, value:ScriptValue[T]):
         self.value = value
 
-class ScriptDataType:
+class ScriptDataType[T]:
     """The default datatype containing all the default operation behaviors."""
 
-    def __init__(self, name:str, inner:type, parent:Self):
+    def __init__(self, name:str, inner:type[T], parent:"ScriptDataType"):
         self.name = name
         self.inner = inner
         self.parent = parent
     
     def issubtype(self, *dts:"ScriptDataType")->bool:
         c = self
+        if BASE_TYPE in dts:
+            return True
         while c is not BASE_TYPE:
             if c in dts:
                 return True
@@ -67,105 +69,111 @@ class ScriptDataType:
     def construct(self, ctx:"ScriptContext")->ScriptValue:
         return ScriptValue(self, self.inner.__new__())
     
-    def conv_str(self, value:ScriptValue)->ScriptValue[str]:
+    def conv_str(self, value:ScriptValue[T])->ScriptValue[str]:
         return self.repr(value)
 
-    def conv_bool(self, value:ScriptValue)->ScriptValue[bool]:
+    def conv_bool(self, value:ScriptValue[T])->ScriptValue[bool]:
         return _convert_script_value(bool(value.inner))
     
-    def repr(self, value:ScriptValue)->ScriptValue[str]:
+    def repr(self, value:ScriptValue[T])->ScriptValue[str]:
         return _convert_script_value(f"<value {self.name} at {hex(id(value))}>")
     
-    def lt(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue[bool]|None:
+    def lt(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue[bool]|None:
         return wrap_python_value(lhs.get().inner < rhs.get().inner)
     
-    def le(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue[bool]|None:
+    def le(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue[bool]|None:
         return wrap_python_value(lhs.get().inner <= rhs.get().inner)
     
-    def gt(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue[bool]|None:
+    def gt(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue[bool]|None:
         return wrap_python_value(lhs.get().inner > rhs.get().inner)
     
-    def ge(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue[bool]|None:
+    def ge(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue[bool]|None:
         return wrap_python_value(lhs.get().inner >= rhs.get().inner)
     
-    def eq(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue[bool]|None:
+    def eq(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue[bool]|None:
         return wrap_python_value(lhs.get().inner == rhs.get().inner)
     
-    def ne(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue[bool]|None:
+    def ne(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue[bool]|None:
         return wrap_python_value(lhs.get().inner != rhs.get().inner)
     
-    def add(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def add(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         return wrap_python_value(lhs.get().inner + rhs.get().inner)
     
-    def sub(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def sub(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         return wrap_python_value(lhs.get().inner - rhs.get().inner)
     
-    def mlt(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def mlt(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         return wrap_python_value(lhs.get().inner * rhs.get().inner)
     
-    def div(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def div(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         return wrap_python_value(lhs.get().inner / rhs.get().inner)
     
-    def mod(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def mod(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         return wrap_python_value(lhs.get().inner % rhs.get().inner)
     
-    def iadd(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def iadd(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         x = wrap_python_value(lhs.get().inner + rhs.get().inner)
         lhs.assign(x)
         return x
     
-    def isub(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def isub(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         x = wrap_python_value(lhs.get().inner - rhs.get().inner)
         lhs.assign(x)
         return x
     
-    def imlt(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def imlt(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         x = wrap_python_value(lhs.get().inner * rhs.get().inner)
         lhs.assign(x)
         return x
     
-    def idiv(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def idiv(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         x = wrap_python_value(lhs.get().inner / rhs.get().inner)
         lhs.assign(x)
         return x
     
-    def imod(self, lhs:ScriptVariable, rhs:ScriptVariable)->ScriptValue|None:
+    def imod(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
         x = wrap_python_value(lhs.get().inner % rhs.get().inner)
         lhs.assign(x)
         return x
     
-    def uadd(self, h:ScriptVariable)->ScriptValue|None:
+    def uadd(self, h:ScriptVariable[T])->ScriptValue|None:
         return wrap_python_value(+h.get().inner)
 
-    def usub(self, h:ScriptVariable)->ScriptValue|None:
+    def usub(self, h:ScriptVariable[T])->ScriptValue|None:
         return wrap_python_value(-h.get().inner)
 
-    def unot(self, h:ScriptVariable)->ScriptValue|None:
+    def unot(self, h:ScriptVariable[T])->ScriptValue|None:
         return wrap_python_value(not h.get().inner)
     
-    def getattr(self, obj:ScriptValue, name:str)->ScriptValue:
+    def getattr(self, obj:ScriptValue[T], name:str)->ScriptValue:
         return wrap_python_value(getattr(obj.inner, name))
     
-    def setattr(self, obj:ScriptValue, name:str, value:ScriptVariable)->ScriptValue:
+    def setattr(self, obj:ScriptValue[T], name:str, value:ScriptVariable)->ScriptValue:
         setattr(obj.inner, name, value.get().inner)
         return wrap_python_value(getattr(obj.inner, name))
 
-    def delattr(self, obj:ScriptValue, name:str)->ScriptValue:
+    def delattr(self, obj:ScriptValue[T], name:str)->ScriptValue:
         v = wrap_python_value(getattr(obj.inner, name))
         delattr(obj.inner, name)
         return v
 
-    def getitem(self, obj:ScriptValue, item:ScriptVariable)->ScriptValue:
+    def getitem(self, obj:ScriptValue[T], item:ScriptVariable)->ScriptValue:
         return wrap_python_value(obj.inner[item.get().inner])
     
-    def setitem(self, obj:ScriptValue, item:ScriptVariable, value:ScriptVariable)->ScriptValue:
+    def setitem(self, obj:ScriptValue[T], item:ScriptVariable, value:ScriptVariable)->ScriptValue:
         obj.inner[item.get().inner] = value.get().inner
         return wrap_python_value(obj.inner[item.get().inner])
 
-    def delitem(self, obj:ScriptValue, item:ScriptVariable)->ScriptValue:
+    def delitem(self, obj:ScriptValue[T], item:ScriptVariable)->ScriptValue:
         v = wrap_python_value(obj.inner[item.get().inner])
         del obj.inner[item.get().inner]
         return v
+
+class ScriptNameValuePair:
+    def __init__(self, name:str, value):
+        self.name = name
+        self.value = value
+
 
 Namespace = dict[str, ScriptVariable]
 
@@ -186,54 +194,178 @@ class ScriptContext:
         self.stack = stack
         self.params = params
 
+_PARAM_NO_DEFAULT = object()
+
 class ScriptFunctionParam:
-    def __init__(self, name:str, dtype:ScriptDataType|str, default=None, pack:bool=False):
+    def __init__(self, name:str, dtypes:list[ScriptDataType|str], default=_PARAM_NO_DEFAULT, pack:bool=False):
         self.name = name
-        self.type = dtype
+        self.types = dtypes
         self.default = default
         self.pack = pack
 
+    def resolve_types(self):
+        for t in self.types:
+            if isinstance(t, ScriptDataType):
+                yield t
+            else:
+                tt = _map_name_to_type(t)
+                if tt is None:
+                    raise exceptions.TMissingName(f"function signature: {repr(t)} not found")
+
+    def __eq__(self, other):
+        if isinstance(other, ScriptFunctionParam):
+            if self.pack != other.pack or self.default != other.default or self.name != other.name:
+                return False
+            st = [t.name if isinstance(t, ScriptDataType) else t for t in self.types]
+            ot = [t.name if isinstance(t, ScriptDataType) else t for t in other.types]
+            return st == ot
+        return super().__eq__(other)
+
 class ScriptFunctionParamSet:
-    def __init__(self, params:list[ScriptFunctionParam]):
+    def __init__(self, params:list[ScriptFunctionParam], pass_ctx:bool=False):
         self.params = params
+        self.pass_ctx = pass_ctx
+
+    def __eq__(self, other):
+        if isinstance(other, ScriptFunctionParamSet):
+            return self.pass_ctx == other.pass_ctx and self.params == other.params
+        return super().__eq__(other)
 
     def check(self):
         got_required_end = False
         index = None
         for i, param in enumerate(self.params):
-            if param.default is None or not param.pack:
-                if got_required_end:
-                    ... #TODO error
+            if param.default is _PARAM_NO_DEFAULT and not param.pack: #is positional and not pack
+                if got_required_end: #after default args
+                    raise exceptions.TInvalidParameterOrder("cannot have positional parameter after parameter with a default value")
             elif not got_required_end:
                 got_required_end = True
                 index = i
             elif param.pack:
-                ... #TODO error cannot have multiple pack params
+                raise exceptions.TInvalidParameterOrder("cannot have multiple pack params or a pack parameter after a parameter with a default value")
         return len(self.params) if index is None else index
 
 class ScriptFunctionSignature:
     def __init__(self, overloads:list[ScriptFunctionParamSet]):
         self.overloads = overloads
 
-    def check(self):
-        ... #make sure no duplicate overloads
-
-    def fit(self, args:list[ScriptVariable])->tuple[int, list[ScriptVariable]]:
-        self.check()
+    def fit(self, args:list[ScriptVariable])->tuple[int, list[ScriptVariable], dict[str, ScriptVariable]]|tuple[None,None,None]:
+        pair = DATA_TYPE_TABLE[ScriptNameValuePair]
         for i, overload in enumerate(self.overloads):
-            l = overload.check()
+            l = overload.check()-1
             if len(args) < l:
                 continue
+            pi = 0
+            ai = 0
+            all_args_match = True
+            rtv_args = []
+            rtv_kwargs = {}
 
-            #TODO make sure function types align with argument types (make sure to handle packing parameter)
+            once = True
+            while ai < len(args) and pi < len(overload.params):
+                p = overload.params[pi]
+                resolvedts = list(p.resolve_types())
+                takespair = pair in resolvedts
+                while (p.pack or once) and ai < len(args):
+                    if once:
+                        once = False
 
+                    _p = p
+                    ts = resolvedts
 
-class ScriptFunction:
-    def __init__(self, cb:Callable[[ScriptContext], ScriptValue]):
-        self.cb = cb
+                    arg = args[ai]
+                    v = arg.get()
+                    if v.type is pair and not takespair:
+                        k:str = v.inner.name
+                        for _p in overload.params:
+                            if _p.name == k:
+                                break
+                        else:
+                            raise exceptions.TUnknownParameter(f"unknown parameter with given keyword argument name: {repr(k)}")
+                        if _p.pack:
+                            raise exceptions.TInvalidParameterOrder(f"cannot keyword assign to pack parameter ({repr(k)})")
+                        ts = list(_p.resolve_types())
+                        v = wrap_python_value(v.inner.value)
+                    else:
+                        k = None
+                    if not v.type.issubtype(*ts):
+                        if not _p.pack:
+                            all_args_match = False
+                        break
+                    ai += 1
+
+                    if k is None: #positional
+                        rtv_args.append(arg)
+                    else: #keyword
+                        rtv_kwargs[k] = ScriptVariable(v)
+                if not all_args_match:
+                    break
+                pi += 1
+                if not once:
+                    once = True
+            if all_args_match:
+                for j in range(pi, len(overload.params)):
+                    p = overload.params[j]
+                    if p.pack:
+                        continue
+                    if p.default is not _PARAM_NO_DEFAULT:
+                        rtv_kwargs.setdefault(p.name, ScriptVariable(wrap_python_value(p.default)))
+                return i, rtv_args, rtv_kwargs
+        return None, None, None
+
+class ScriptFunction[T]:
+
+    def __init__(self):
+        self.signature = ScriptFunctionSignature([])
+        self.cbs:list[Callable[..., ScriptValue]] = []
+
+    def __get__(self, instance, owner)->"BoundScriptFunction[T]":
+        b = BoundScriptFunction.__new__(BoundScriptFunction)
+        b.__dict__.update(self.__dict__)
+        b.instance = instance
+        return b
+
+    def add_overload(self, params:ScriptFunctionParamSet, cb:Callable[..., ScriptValue]):
+        params.check()
+        for existing in self.signature.overloads:
+            if existing == params:
+                raise exceptions.DuplicateOverloadException("overload already exists in this function")
+        self.signature.overloads.append(params)
+        self.cbs.append(cb)
+
+    def overload(self, *params:ScriptFunctionParam, auto:bool=False, pass_ctx:bool=False):
+        def decor(cb:Callable[..., ScriptValue]):
+            if auto and not params:
+                ... #TODO inspect function and determine types from annotations
+            else:
+                self.add_overload(ScriptFunctionParamSet(list(params), pass_ctx=pass_ctx), cb)
+            return cb
+        return decor
+    
+    def _get_fit(self, ctx:ScriptContext):
+        i, args, kwargs = self.signature.fit(ctx.params)
+        if i is None:
+            raise exceptions.TTypeError(f"function has no overloads that match the following arguments: {", ".join(v.type().name for v in ctx.params)}")
+        return self.cbs[i], i, args, kwargs
 
     def __call__(self, ctx:ScriptContext):
-        return self.cb(ctx)
+        cb, i, args, kwargs = self._get_fit(ctx)
+        if self.signature.overloads[i].pass_ctx:
+            return cb(ctx, *args, **kwargs)
+        else:
+            return cb(*args, **kwargs)
+        
+class BoundScriptFunction[T](ScriptFunction[T]):
+    def __init__(self, instance:T):
+        super().__init__()
+        self.instance = instance
+
+    def __call__(self, ctx:ScriptContext):
+        cb, i, args, kwargs = self._get_fit(ctx)
+        if self.signature.overloads[i].pass_ctx:
+            return cb(self.instance, ctx, *args, **kwargs)
+        else:
+            return cb(self.instance, *args, **kwargs)
 
 FunctionTable = dict[str, Callable[[ScriptContext], ScriptValue]]
 
@@ -365,6 +497,8 @@ def _map_name_to_type(name:str):
     return t
 
 def wrap_python_value(value):
+    if isinstance(value, ScriptValue):
+        return value
     v = _convert_script_value(value)
     if v is None:
         t = type(value)
@@ -373,7 +507,12 @@ def wrap_python_value(value):
         v = ScriptValue(st, value)
     return v
 
-def wrap_python_type(t:type):
+def wrap_python_type(t:type|ScriptDataType):
+    if isinstance(t, ScriptDataType):
+        return t
+    st = DATA_TYPE_TABLE.get(t, None)
+    if st is not None:
+        return st
     st = tchain = ScriptDataType(t.__name__, t, None)
     for sup in t.mro():
         supt = DATA_TYPE_TABLE.get(sup, None)
@@ -422,6 +561,27 @@ class Script:
                 current.children.append(exprnode)
                 current = exprnode
 
+        def look_nvpair():
+            if isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
+                looknode = current.parent
+            else:
+                looknode = current
+            if isinstance(looknode, ParsingNodeNVPair) and looknode.value is not None:
+                return looknode
+            return None
+
+        def end_nvpair():
+            nonlocal current
+            looknode:ParsingNodeNVPair|None = look_nvpair()
+            if looknode is not None:
+                if not isinstance(looknode.value, (ParsingNodeExpression, ParsingNodeParentheses)):
+                    raise exceptions.TExpectedEvaluable("expected evaluable expression as value for name-value pair", target=(current.match.pos, current.match))
+                current = looknode.parent
+
+        def fail_global():
+            if isinstance(current, ParsingNodeGlobalStatement):
+                raise exceptions.TExpectedName("expected variable name", target=(i, r))
+            
         #build the parse tree
         while True:
             r = RE_MAIN.match(self.raw, pos=i)
@@ -430,7 +590,10 @@ class Script:
                     raise exceptions.TParsingException("unrecognizable syntax", target=(i, None))
                 return root
             if (keyword := r["keyword"]) is not None:
+                if look_nvpair():
+                    raise exceptions.TUnexpectedKeyword(f"keyword not expected here", target=(i, r))
                 if keyword == "if":
+                    fail_global()
                     if isinstance(current, ParsingNodeConditionPair):
                         if current.condition is None and current.codeblock is None:
                             current.takes_condition = True
@@ -448,6 +611,7 @@ class Script:
                     current.children.append(node)
                     current = cond
                 elif keyword == "else":
+                    fail_global()
                     while current is not None:
                         if isinstance(current, ParsingNodeConditionPair):
                             break
@@ -458,13 +622,32 @@ class Script:
                     cond = ParsingNodeConditionPair(r, current)
                     current.children.append(cond)
                     current = cond
+                elif keyword == "global":
+                    fail_global()
+                    if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
+                        raise exceptions.TUnexpectedKeyword("keyword \"global\" not expected here", target=(i, r))
+                    node = ParsingNodeGlobalStatement(r, current)
+                    current.children.append(node)
+                    current = node
                 i += r.end() - i
             elif r["function"] is not None:
+                fail_global()
                 wrap_statement()
                 node = ParsingNodeFunction(r["function_name"], r, current)
                 current.children.append(node)
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
                 current = node
+                i += r.end() - i
+            elif r["name_value_pair"] is not None:
+                fail_global()
+                name = r["name_value_pair_name"]
+                wrap_statement()
+                nvpair = ParsingNodeNVPair(r, current)
+                nnode = ParsingNodeName(name, r, nvpair)
+                nvpair.children.append(nnode)
+                current.children.append(nvpair)
+                current = nvpair
+                end_nvpair()
                 i += r.end() - i
             elif r["value"] is not None:
                 v_name = r["value_name"]
@@ -472,10 +655,17 @@ class Script:
                 v_integer = r["value_integer"]
                 v_float = r["value_float"]
                 v_bool = r["value_bool"]
-                wrap_statement()
+                v_null = r["value_null"]
+                escape_current = False
                 if v_name:
+                    if isinstance(current, ParsingNodeGlobalStatement):
+                        escape_current = True
+                    else:
+                        wrap_statement()
                     node = ParsingNodeName(v_name, r, current)
                 else:
+                    fail_global()
+                    wrap_statement()
                     if v_string:
                         vs = v_string[1:-1] #strip off the quotes
                         chars = []
@@ -512,17 +702,24 @@ class Script:
                         value = float(v_float)
                     elif v_bool:
                         value = v_bool == "true"
+                    elif v_null:
+                        value = None
                     else:
                         raise exceptions.TUnknownValue(f"unknown value", target=(i, r))
                     node = ParsingNodeValue(value, r, current)
                 current.children.append(node)
+                if escape_current:
+                    current = current.parent
+                end_nvpair()
                 i += r.end() - i
             elif (operator := r["operator"]) is not None:
+                fail_global()
                 wrap_statement()
                 node = ParsingNodeOperator(operator, r, current)
                 current.children.append(node)
                 i += r.end() - i
             elif r["parenthesis"] is not None:
+                fail_global()
                 end_condition()
                 node = ParsingNodeParentheses(r, current)
                 current.children.append(node)
@@ -530,6 +727,7 @@ class Script:
                 current = node
                 i += r.end() - i
             elif r["codeblock"] is not None:
+                fail_global()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
                     raise exceptions.TUnexpectedSymbol("{ unexpected here", target=(i, r))
                 if isinstance(current, ParsingNodeExpression):
@@ -545,22 +743,27 @@ class Script:
                 current = node
                 i += r.end() - i
             elif (enclend := r["enclend"]) is not None:
+                fail_global()
                 if enclstack is None:
                     raise exceptions.TEnclMismatch(f"unmatched {enclend}", target=(i, r))
                 elif enclstack.end != enclend:
                     raise exceptions.TEnclMismatch(f"closing {enclend} does not match opening {enclstack.c}", target=(i, r))
                 current = enclstack.basenode
                 enclstack = enclstack.prev
+                end_nvpair()
                 i += r.end() - i
             elif r["comma"] is not None:
-                if enclstack is not None:
+                fail_global()
+                if enclstack is not None or look_nvpair():
                     if isinstance(enclstack.pnode, ParsingNodeFunction):
                         current = enclstack.pnode
                         current.children.append(ParsingNodeComma(r, current))
+                        i += r.end() - i
                         continue
                 raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
             elif r["semicolon"] is not None:
-                if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
+                fail_global()
+                if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)) or look_nvpair():
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
                 while current is not None:
                     if isinstance(current, (ParsingNodeCodeBlock, ParsingNodeIfStatement)):
@@ -574,6 +777,7 @@ class Script:
             elif isinstance(current, ParsingNodeConditionPair) and current.codeblock is None:
                 raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
             else:
+                fail_global()
                 return root
 
     def _generate_function_call_step(self, node:ParsingNodeFunction, params:list[Callable[[], ScriptVariable]]):
@@ -592,11 +796,18 @@ class Script:
                 local_ns = {}
                 self.stack = ns_stack(local_ns, self.stack) #push
                 ctx = ScriptContext(stack=self.stack, params=evaluated_params)
-                value = function(ctx)
+                try:
+                    value = function(ctx)
+                except NotImplementedError as e:
+                    raise exceptions.TNotImplemented(f"function {repr(node.function_name)} is not implemented") from e
+                except Exception as e:
+                    raise exceptions.wrap(e)
+                if value is NotImplemented:
+                    raise exceptions.TNotImplemented(f"function {repr(node.function_name)} is not implemented")
                 self.stack = self.stack.prev #pop
                 return value
             else:
-                raise exceptions.TMissingFunction(f"cannot find callable name {node.function_name}")
+                raise exceptions.TMissingFunction(f"cannot find function {repr(node.function_name)}")
         return _function_step
 
     def _generate_function_steps(self, node:ParsingNodeFunction, rtv:_step_evaluation|None=None):
@@ -608,6 +819,7 @@ class Script:
                     raise exceptions.TIncorrectParamaterOrder("comma is not following a parameter", target=child)
                 params.append(param)
                 param = None
+                continue
             elif param is not None:
                 raise exceptions.TIncorrectParamaterOrder("consecutive parameters without a comma", target=child)
                 
@@ -754,6 +966,22 @@ class Script:
             value = _convert_script_value(operation.value)
             assert value is not None, f"Failed to lookup type for value: {operation} {repr(operation.value)}"
             return value
+        elif isinstance(operation, ParsingNodeNVPair):
+            step_eval = _step_evaluation()
+            vstep = _step_evaluation()
+            self._generate_expression_steps(operation.value, vstep)
+            def _step():
+                v = vstep()
+                if isinstance(v, _variable_access):
+                    v = v.resolve(self.stack)
+                if isinstance(v, ScriptVariable):
+                    v = v.get()
+                if not isinstance(v, ScriptValue):
+                    raise exceptions.TMustEvaluate("value for name-value pair must evaluate but resulted in no value")
+                return ScriptValue(DATA_TYPE_TABLE[ScriptNameValuePair], ScriptNameValuePair(operation.name.name, v.inner))
+            step_eval.cb = _step
+            return step_eval
+            
 
     def _generate_expression_steps(self, node:ParsingNodeExpression|ParsingNodeParentheses, rtv:_step_evaluation|None=None):
         operation_tree = self._get_expression_operations(node)
@@ -768,6 +996,20 @@ class Script:
             def _step():
                 return v
             return _step
+        def _resolve_nvpair(node:ParsingNodeNVPair):
+            vstep = _step_evaluation()
+            self._generate_expression_steps(node.value, vstep)
+            def _step():
+                v = vstep()
+                if isinstance(v, _variable_access):
+                    v = v.resolve(self.stack)
+                if isinstance(v, ScriptVariable):
+                    v = v.get()
+                if not isinstance(v, ScriptValue):
+                    raise exceptions.TMustEvaluate("value for name-value pair must evaluate but resulted in no value")
+                return ScriptValue(DATA_TYPE_TABLE[ScriptNameValuePair], ScriptNameValuePair(node.name.name, v.inner))
+            return _step
+
         if operation_tree is None:
             child = node.children[0]
             if isinstance(child, ParsingNodeFunction):
@@ -779,6 +1021,11 @@ class Script:
                 if rtv is not None:
                     value = _convert_script_value(child.value)
                     rtv.cb = lambda: value
+            elif isinstance(child, ParsingNodeNVPair):
+                assert child.name is not None, f"NVPair name is missing {child}"
+                assert child.value is not None, f"NVPair value is missing {child}"
+                if rtv is not None:
+                    rtv.cb = _resolve_nvpair(child)
             assert not isinstance(child, (ParsingNodeExpression, ParsingNodeParentheses)), f"illegal recursive node: {node} -> {child}"   
         else:
             os = self._generate_operation_steps(operation_tree)
@@ -836,6 +1083,22 @@ class Script:
         else:
             steps = []
 
+        def _resolve_global(node:ParsingNodeGlobalStatement, rtv:_step_evaluation|None=None):
+            assert node.name is not None
+            name = node.name.name
+            nonetype = type(None)
+            def _step():
+                ns = self.stack.find_name(name)
+                if ns is None:
+                    self.global_scope[name] = ScriptVariable(DATA_TYPE_TABLE[nonetype])
+                elif ns is not self.global_scope:
+                    self.global_scope[name] = ns.pop(name)
+
+            if rtv is None:
+                self.steps.append(_step)
+            else:
+                rtv.cb = _step
+
         for child in node.children:
             if rtv is None:
                 srtv = None
@@ -852,6 +1115,8 @@ class Script:
                 self._generate_codeblock_steps(child, srtv)
             elif isinstance(child, ParsingNodeIfStatement):
                 self._generate_if_statement_steps(child, srtv)
+            elif isinstance(child, ParsingNodeGlobalStatement):
+                _resolve_global(child, srtv)
 
             if srtv:
                 steps.append(srtv)

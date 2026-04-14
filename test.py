@@ -6,11 +6,6 @@ import traceback
 
 script_builtins.activate()
 
-def test_function(ctx:ScriptContext)->ScriptValue:
-    x = ctx.params[0]
-    x.assign(x.type().add(x, ScriptVariable(wrap_python_value(1))))
-    return True
-
 async def _print_async(x:ScriptValue):
     print(x.type.conv_str(x).inner)
 
@@ -19,25 +14,21 @@ def test_async(ctx:ScriptContext):
     x = ctx.params[0].get()
     return _print_async(x)
 
-SCRIPT_FUNCTION_TABLE["test"] = test_function
 SCRIPT_FUNCTION_TABLE["test_async"] = test_async
 
 raw = r"""
-x = 1 + 1
-if x > 1 {
-    if true {
-    test_async(str(x) + " > 1")
-    }
-} else if (x == 1) { test_async(str(x) + " == 1") }
-else {
-    test_async(str(x) + " < 1")
-}
 
-test_async("test")
+x = map(a:1, b:2);
+y = map(pair(1,"a"), pair(2,"b"));
+z = list(1, 2, 3, 4, 5, 6);
+
+log(x,y,z,sep:"\n")
 
 """
 
 s = Script(raw)
+
+print(s.raw)
 
 print("parsing")
 pstart = time.perf_counter_ns()
@@ -72,6 +63,7 @@ async def run_func(runner:utils.ScriptRunner, s:Script):
 
 if __name__ == "__main__":
     import asyncio
+
     print("\ncompiling")
     cstart = time.perf_counter_ns()
     s.compile(p)
@@ -84,7 +76,3 @@ if __name__ == "__main__":
     
     asyncio.run(run_func(runner, s))
     
-    print(s.raw)
-    # print(repr(s.scope["x"].get().inner))
-    # print(repr(s.scope["y"].get().inner))
-    # print(repr(s.scope["z"].get().inner))

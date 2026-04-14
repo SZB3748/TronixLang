@@ -23,6 +23,9 @@ class TronixException(Exception):
         if bool(value) != self.is_warning:
             self.flags ^= FLAG_WARNING
 
+class DuplicateOverloadException(Exception):
+    "Overload already exists in function."
+
 class _TronixRuntimeAssertion(Exception):
     "Assertion raised during script runtime."
 
@@ -54,6 +57,9 @@ class TExpectedKeyword(TParsingException):
 
 class TExpectedEvaluable(TParsingException):
     "Evaluable expression was expected here."
+
+class TExpectedName(TParsingException):
+    "Name was expected."
 
 
 
@@ -98,6 +104,18 @@ class TNotImplemented(TRuntimeException):
 
 class TMustEvaluate(TRuntimeException):
     "Function or operation must result in a value."
+
+class TTypeError(TRuntimeException):
+    "Expected one type but got another."
+
+class TInvalidParameterOrder(TRuntimeException):
+    "Parameter(s) came in wrong order."
+
+class TUnknownParameter(TRuntimeException):
+    "Unknown parameter."
+
+class TUserException(TRuntimeException):
+    "Exception raised by user code."
 
 class TWrappedException(TRuntimeException):
     def __init__(self, e:Exception, flags:ExceptionFlags=0):
