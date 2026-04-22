@@ -1,8 +1,9 @@
-from . import exceptions, script
+from . import exceptions, json_proxy, script, utils
 from .script import *
 from .utils import ScriptFunction, ScriptFunctionParam
 
 import string
+import uuid
 
 class _TypeType(ScriptDataType[type]):
 
@@ -120,6 +121,117 @@ class _MapType(ScriptDataType[dict]):
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({", ".join((k:=wrap_python_value(kx)).type.repr(k).inner + ": " + (v:=wrap_python_value(vx)).type.repr(v).inner for kx, vx in value.inner.items())})")
 
+class _rodict_dummy(dict):
+    pass
+
+class _MapReadonlyType(_MapType):
+
+    def setitem(self, obj, name, value):
+        raise TypeError(f"{self.name} object is read-only")
+        
+    def delitem(self, obj, name):
+        raise TypeError(f"{self.name} object is read-only")
+
+class _UUIDType(ScriptDataType[uuid.UUID]):
+
+    f_construct:ScriptFunction[Self] = ScriptFunction()
+    construct = f_construct
+
+    def getattr(self, obj, name):
+        raise AttributeError(repr(name))
+    
+    def setattr(self, obj, name, value):
+        raise TypeError(f"{self.name} object is read-only")
+        
+    def delattr(self, obj, name):
+        raise TypeError(f"{self.name} object is read-only")
+    
+class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
+    
+    def getattr(self, obj, name):
+        root = json_proxy.JsonProxyNode([], obj.inner, None)
+        return wrap_python_value(root.getchild(name))
+    
+    def setattr(self, obj, name, value):
+        v = value.get()
+        root = json_proxy.JsonProxyNode([], obj.inner, None)
+        root.setchild(name, v.inner)
+        return v
+        
+    def delattr(self, obj, name):
+        root = json_proxy.JsonProxyNode([], obj.inner, None)
+        return wrap_python_value(root.delchild(name))
+    
+    def getitem(self, obj, item):
+        key = item.get()
+        if key.type.issubtype(String, Integer):
+            root = json_proxy.JsonProxyNode([], obj.inner, None)
+            return wrap_python_value(root.getchild(key.inner))
+        else:
+            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+    
+    def setitem(self, obj, item, value):
+        v = value.get()
+        key = item.get()
+        if key.type.issubtype(String, Integer):
+            root = json_proxy.JsonProxyNode([], obj.inner, None)
+            root.setchild(key.inner, v.inner)
+            return v
+        else:
+            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+    
+    def delitem(self, obj, item):
+        key = item.get()
+        if key.type.issubtype(String, Integer):
+            root = json_proxy.JsonProxyNode([], obj.inner, None)
+            return wrap_python_value(root.delchild(key.inner))
+        else:
+            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+        
+    def repr(self, value):
+        data, _ = value.inner.get_data()
+        v = wrap_python_value(data)
+        return v.type.repr(v)
+
+    
+class _JsonProxyNodeType(ScriptDataType[json_proxy.JsonProxyNode]):
+    def getattr(self, obj, name):
+        return wrap_python_value(obj.inner.getchild(name))
+    
+    def setattr(self, obj, name, value):
+        v = value.get()
+        obj.inner.setchild(name, v.inner)
+        return v
+        
+    def delattr(self, obj, name):
+        return wrap_python_value(obj.inner.delchild(name))
+    
+    def getitem(self, obj, item):
+        key = item.get()
+        if key.type.issubtype(String, Integer):
+            return wrap_python_value(obj.inner.getchild(key.inner))
+        else:
+            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+    
+    def setitem(self, obj, item, value):
+        v = value.get()
+        key = item.get()
+        if key.type.issubtype(String, Integer):
+            obj.inner.setchild(key.inner, v.inner)
+            return v
+        else:
+            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+    
+    def delitem(self, obj, item):
+        key = item.get()
+        if key.type.issubtype(String, Integer):
+            return wrap_python_value(obj.inner.delchild(key.inner))
+        else:
+            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+        
+    def repr(self, value):
+        v = wrap_python_value(value.inner.resolve())
+        return v.type.repr(v)
 
 AnyType = BASE_TYPE
 Type = _TypeType("type", type, BASE_TYPE)
@@ -132,12 +244,16 @@ NamePair = _NameValuePairType("namepair", ScriptNameValuePair, BASE_TYPE)
 Pair = _PairType("pair", _pair, BASE_TYPE)
 List = _ListType("list", list, BASE_TYPE)
 Map = _MapType("map", dict, BASE_TYPE)
+Map_readonly = _MapReadonlyType("_map_readonly", _rodict_dummy, Map)
+UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
+JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TYPE)
+JsonNode = _JsonProxyNodeType("JsonNode", json_proxy.JsonProxyNode, BASE_TYPE)
 
 null = ScriptValue(NullType, None)
 true = ScriptValue(Bool, True)
 false = ScriptValue(Bool, False)
 
-_builtin_types:set[ScriptDataType] = {Type, Float, Integer, String, Bool, NamePair, Pair, List, Map}
+_builtin_types:list[ScriptDataType] = [Type, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID]
 
 @_TypeType.f_construct.overload(ScriptFunctionParam("value", [AnyType, NamePair]))
 def type_construct(self, value:ScriptVariable):
@@ -223,10 +339,9 @@ def map_construct(self, *items:ScriptVariable[_pair|ScriptNameValuePair]):
             d[item.name] = item.value
     return ScriptValue(self, d)
 
-def _add_type(dt:ScriptDataType):
-    script.DATA_TYPE_TABLE[dt.inner] = dt
-    script.SCRIPT_FUNCTION_TABLE[dt.name] = dt.construct
-    script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(Type, dt.inner))
+@_UUIDType.f_construct.overload(ScriptFunctionParam("hex", [String]))
+def uuid_construct(self, hex:ScriptVariable[str]):
+    return ScriptValue(self, uuid.UUID(hex))
 
 f_isinstance = ScriptFunction()
 f_issubtype = ScriptFunction()
@@ -234,6 +349,7 @@ f_has = ScriptFunction()
 f_hasfunc = ScriptFunction()
 f_log = ScriptFunction()
 f_error = ScriptFunction()
+f_flush = ScriptFunction()
 
 @f_isinstance.overload(ScriptFunctionParam("value", [AnyType,NamePair]), ScriptFunctionParam("type", [Type]))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
@@ -275,10 +391,19 @@ def function_log(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[
 def function_error(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
     raise exceptions.TUserException(f"{sep.get().inner.join((xv:=xi.get()).type.conv_str(xv).inner for xi in x)}{end.get().inner}")
 
+@f_flush.overload(ScriptFunctionParam("flushable", [JsonProxyRoot]))
+def function_flush_json_proxy_root(flushable:ScriptVariable[json_proxy.JsonProxyRoot]):
+    root = flushable.get().inner
+    root.merge_changes()
+    return true
+
 def activate():
     script.DATA_TYPE_TABLE[NullType.inner] = NullType
+    script.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly
     for dt in _builtin_types:
-        _add_type(dt)
+        utils.add_type(dt)
+    utils.add_type(JsonProxyRoot, constructor=False)
+    utils.add_type(JsonNode, constructor=False)
     script.SCRIPT_FUNCTION_TABLE["isinstance"] = f_isinstance
     script.SCRIPT_FUNCTION_TABLE["issubtype"] = f_issubtype
     script.SCRIPT_FUNCTION_TABLE["has"] = f_has

@@ -42,9 +42,21 @@ def add_type(dt:ScriptDataType, constructor:bool=True):
         script.SCRIPT_FUNCTION_TABLE[dt.name] = dt.construct
     script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(script.DATA_TYPE_TABLE[type], dt.inner))
 
+def remove_type(dt:ScriptDataType):
+    if dt is None:
+        return
+    if script.DATA_TYPE_TABLE.get(dt.inner,None) is dt:
+        del script.DATA_TYPE_TABLE[dt.inner]
+    if script.SCRIPT_FUNCTION_TABLE.get(dt.name,None) is dt.construct:
+        del script.SCRIPT_FUNCTION_TABLE[dt.name]
+    var = script.SCRIPT_GLOBAL_SCOPE.get(dt.name,None)
+    if var is not None and var.get().inner is dt.inner:
+        del script.SCRIPT_GLOBAL_SCOPE[dt.name]
+
 class ScriptRunner:
     def __init__(self):
         self.parse_trees:dict[bytes, ParsingNode] = {}
+        self.script_end_cbs:list[Callable[[Script],Any]] = []
 
     def _prep(self, s:Script|str, force_parse:bool, force_compile:bool):
         if isinstance(s, str):
@@ -98,6 +110,13 @@ class ScriptRunner:
         for result in self.run_iter(s, force_parse, force_compile):
             if inspect.isawaitable(result):
                 await result
+
+    def add_script_end_cb(self, f:Callable[[Script],Any]):
+        self.script_end_cbs.append(f)
+        return f
+    
+    def remove_script_end_cb(self, f:Callable[[Script],Any]):
+        self.script_end_cbs.remove(f)
 
 _PARAM_NO_DEFAULT = object()
 

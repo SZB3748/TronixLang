@@ -616,6 +616,12 @@ class Script:
                     param = param_cb()
                     while isinstance(param, _step_evaluation):
                         param = param()
+                    if isinstance(param, _variable_access):
+                        x = param.resolve(self.stack)
+                        if x is None:
+                            raise exceptions.TMissingName(f"{repr(".".join(param.name_path))} not found")
+                        else:
+                            param = x
                     if isinstance(param, ScriptValue):
                         param = ScriptVariable(param)
                     evaluated_params.append(param)
@@ -1006,12 +1012,23 @@ def _resolve_vh(script:Script, h)->ScriptValue:
         raise exceptions._TronixRuntimeAssertion(f"invalid operand {_h} -> {h}")
 
 def _validate_ih(h):
-    return isinstance(h, (_variable_access, ScriptVariable, ParsingNodeName))
+    return isinstance(h, (_step_evaluation, _variable_access, ScriptVariable, ParsingNodeName))
 
-def _resolve_ih(script:Script, h, make_name_if_missing:bool=False)->ScriptVariable:
+def _resolve_ih(script:Script, h, make_name_if_missing:bool=False, get_attr:bool=False):
     _h = h
+    if isinstance(h, _step_evaluation):
+        h = h()
     if isinstance(h, _variable_access):
-        h = h.resolve(script.stack)
+        if get_attr and len(h.name_path) > 1:
+            x = h.resolve(script.stack, -1)
+            if x is None:
+                raise exceptions.TMissingName(f"{repr(".".join(h.name_path[:-2]))} not found")
+            elif isinstance(x, ScriptVariable):
+                return x.get(), h.name_path[-1]
+            else:
+                return x, h.name_path[-1]
+        else:
+            h = h.resolve(script.stack)
         
     if isinstance(h, ScriptVariable):
         return h
@@ -1272,39 +1289,31 @@ def _generate_dot_steps(script:Script, lh, rh):
     return _step
 
 def _generate_assign_steps(script:Script, lh, rh):
-    if isinstance(lh, _variable_access) and len(lh.name_path) > 1:
-        if not _validate_vh(rh):
-            raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
-        def _step():
-            l = lh.resolve(script.stack, -1)
-            if l is None:
-                raise exceptions.TMissingName(f"{repr(lh.name_path[0])} not found")
-            elif isinstance(l, ScriptVariable):
-                r = _resolve_vh(script, rh)
-                l.assign(r)
-            else:
-                r = _resolve_vh(script, rh)
-                try:
-                    x = l.type.setattr(l, lh.name_path[-1], r)
-                except NotImplementedError as e:
-                    raise exceptions.TNotImplemented("operation is not implemented") from e
-                except Exception as e:
-                    raise exceptions.wrap(e)
-                if x is None:
-                    raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
-                elif x is NotImplemented:
-                    raise exceptions.TNotImplemented("operation is not implemented")
-            return r
-    elif not _validate_ih(lh):
+    if not _validate_ih(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute")
-    elif not _validate_vh(rh):
+    elif not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
-    else:
-        def _step():
-            l = _resolve_ih(script, lh, make_name_if_missing=True)
+    
+    def _step():
+        l = _resolve_ih(script, lh, make_name_if_missing=True, get_attr=True)
+        if isinstance(l, ScriptVariable):
             r = _resolve_vh(script, rh)
             l.assign(r)
             return r
+        else:
+            lv, ln = l
+            r = _resolve_h(script, rh)
+            try:
+                x = lv.type.setattr(lv, ln, r)
+            except NotImplementedError as e:
+                raise exceptions.TNotImplemented("operation is not implemented") from e
+            except Exception as e:
+                raise exceptions.wrap(e)
+            if x is None:
+                raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
+            elif x is NotImplemented:
+                raise exceptions.TNotImplemented("operation is not implemented")
+            return x
     return _step
 
 def _generate_uadd_steps(script:Script, lh, rh):

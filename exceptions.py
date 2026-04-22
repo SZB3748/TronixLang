@@ -117,6 +117,13 @@ class TUnknownParameter(TRuntimeException):
 class TUserException(TRuntimeException):
     "Exception raised by user code."
 
+class TBadValue(TRuntimeException):
+    "Function received a value it didn't like."
+
+    def __init__(self, message:str, target:parsingnodes.ParsingNode|None=None, flags:ExceptionFlags=0, parameter:str|None=None):
+        super().__init__(message, target, flags)
+        self.parameter = parameter
+
 class TWrappedException(TRuntimeException):
     def __init__(self, e:Exception, flags:ExceptionFlags=0):
         super().__init__(f"{type(e).__name__}: {e}", flags)

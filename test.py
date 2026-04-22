@@ -1,8 +1,20 @@
 from .script import *
-from . import script_builtins, utils
+from . import json_proxy, script_builtins, utils
 
 import time
 import traceback
+import tracemalloc
+
+class monitormem:
+    def __enter__(self):
+        tracemalloc.start()
+    
+    def __exit__(self, exc_type, exc, tb):
+        printmem()
+        tracemalloc.stop()
+
+def printmem():
+    print("MEM (current, peak):", *tracemalloc.get_traced_memory())
 
 script_builtins.activate()
 
@@ -18,11 +30,7 @@ SCRIPT_FUNCTION_TABLE["test_async"] = test_async
 
 raw = r"""
 
-x = map(a:1, b:2);
-y = map(pair(1,"a"), pair(2,"b"));
-z = list(1, 2, 3, 4, 5, 6);
-
-log(x,y,z,sep:"\n")
+log("hello world")
 
 """
 
@@ -64,6 +72,21 @@ async def run_func(runner:utils.ScriptRunner, s:Script):
 if __name__ == "__main__":
     import asyncio
 
+    def configupdate(d)->bool:
+        import json
+        c = json.dumps(d, indent=4)
+        with open(configs.path, "w") as f:
+            f.write(c)
+        return True
+
+    configs = json_proxy.JsonProxyRoot("data/config.json", savefunc=configupdate)
+    @runner.add_script_end_cb
+    def save_config(_):
+        if configs._pending_updates:
+            configs.merge_changes()
+
+    SCRIPT_GLOBAL_SCOPE["configs"] = ScriptVariable(wrap_python_value(configs))
+
     print("\ncompiling")
     cstart = time.perf_counter_ns()
     s.compile(p)
@@ -75,4 +98,5 @@ if __name__ == "__main__":
     runner.parse_trees[s._hash] = p
     
     asyncio.run(run_func(runner, s))
+
     
