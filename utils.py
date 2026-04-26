@@ -88,7 +88,6 @@ class ScriptRunner:
                         s.stack = s.stack.prev
                 else:
                     yield x
-
         yield from _next(s.steps)
 
     def run(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
@@ -227,6 +226,8 @@ class ScriptFunctionSignature:
                 pi += 1
                 if not once:
                     once = True
+            if pi == len(overload.params) and ai < len(args):
+                continue #too many arguments
             if all_args_match:
                 for j in range(pi, len(overload.params)):
                     p = overload.params[j]
@@ -236,6 +237,8 @@ class ScriptFunctionSignature:
                         rtv_kwargs.setdefault(p.name, ScriptVariable(wrap_python_value(p.default)))
                 return i, rtv_args, rtv_kwargs
         return None, None, None
+
+ScriptFunctionParam_Like = ScriptFunctionParam|str|tuple[str]|tuple[str, str|ScriptDataType|type|list[str|ScriptDataType|type]]|dict[str]
 
 class ScriptFunction[T]:
 
@@ -257,12 +260,43 @@ class ScriptFunction[T]:
         self.signature.overloads.append(params)
         self.cbs.append(cb)
 
-    def overload(self, *params:ScriptFunctionParam, auto:bool=False, pass_ctx:bool=False):
+    def overload(self, *params:ScriptFunctionParam_Like, auto:bool=False, pass_ctx:bool=False):
         def decor(cb:Callable[..., ScriptValue]):
             if auto and not params:
                 ... #TODO inspect function and determine types from annotations
             else:
-                self.add_overload(ScriptFunctionParamSet(list(params), pass_ctx=pass_ctx), cb)
+                plist = []
+                AnyType = script.DATA_TYPE_TABLE[object]
+                for p in params:
+                    if isinstance(p, str):
+                        p = ScriptFunctionParam(p, [AnyType])
+                    elif isinstance(p, tuple):
+                        if len(p) < 1:
+                            raise ValueError(f"cannot construct script function parameter from data: {p}")
+                        elif len(p) > 1:
+                            tp = p[1]
+                            if isinstance(tp, type):
+                                tp = script.DATA_TYPE_TABLE[tp]
+                            if isinstance(tp, (str, ScriptDataType)):
+                                p = (p[0], [tp], *p[2:])
+                            elif isinstance(tp, list):
+                                tl = []
+                                for v in tp:
+                                    if isinstance(v, type):
+                                        v = script.DATA_TYPE_TABLE[v]
+                                    elif not isinstance(v, (str, ScriptDataType)):
+                                        raise TypeError(f"script function parameter type union must be made of str, ScriptDataType, or type, got: {type(v).__name__} {v}")
+                                    tl.append(v)
+                                p = (p[0], tl, *p[2:])
+                            p = ScriptFunctionParam(*p)
+                        else:
+                            p = ScriptFunctionParam(p[0], [AnyType])
+                    elif isinstance(p, dict):
+                        p = ScriptFunctionParam(**p)
+                    elif not isinstance(p, ScriptFunctionParam):
+                        raise ValueError(f"cannot construct script function parameter from value: {p}")
+                    plist.append(p)  
+                self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx), cb)
             return cb
         return decor
     

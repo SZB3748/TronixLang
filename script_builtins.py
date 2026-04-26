@@ -1,6 +1,6 @@
 from . import exceptions, json_proxy, script, utils
 from .script import *
-from .utils import ScriptFunction, ScriptFunctionParam
+from .utils import ScriptFunction
 
 import string
 import uuid
@@ -255,35 +255,35 @@ false = ScriptValue(Bool, False)
 
 _builtin_types:list[ScriptDataType] = [Type, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID]
 
-@_TypeType.f_construct.overload(ScriptFunctionParam("value", [AnyType, NamePair]))
+@_TypeType.f_construct.overload(("value", [AnyType, NamePair]))
 def type_construct(self, value:ScriptVariable):
         return ScriptValue(self, value.type().inner)
 
-@_FloatType.f_construct.overload(ScriptFunctionParam("value", [Float], default=0.0))
+@_FloatType.f_construct.overload(("value", Float, 0.0))
 def float_construct_identity(self, value:ScriptVariable[float]):
     return ScriptValue(self, value.get().inner)
 
-@_FloatType.f_construct.overload(ScriptFunctionParam("value", [Integer,Bool,String]))
+@_FloatType.f_construct.overload(("value", [Integer,Bool,String]))
 def float_construct(self, value:ScriptVariable[int|bool|str]):
     return ScriptValue(self, float(value.get().inner))
 
-@_IntegerType.f_construct.overload(ScriptFunctionParam("value", [Integer], default=0))
+@_IntegerType.f_construct.overload(("value", Integer, 0))
 def integer_construct_identity(self, value:ScriptVariable[int]):
     return ScriptValue(self, value.get().inner)
 
-@_IntegerType.f_construct.overload(ScriptFunctionParam("value", [Bool, String, Float]))
+@_IntegerType.f_construct.overload(("value", [Bool, String, Float]))
 def integer_construct_convert(self, value:ScriptVariable[bool|str|float]):
     return ScriptValue(self, int(value.get().inner))
 
-@_IntegerType.f_construct.overload(ScriptFunctionParam("value", [String]), ScriptFunctionParam("base", [Integer]))
+@_IntegerType.f_construct.overload(("value", String), ("base", Integer))
 def integer_construct_convert_base(self, value:ScriptVariable[str], base:ScriptVariable[int]):
     return ScriptValue(self, int(value.get().inner, base.get().inner))
 
-@_StringType.f_construct.overload(ScriptFunctionParam("value", [String], default=""))
+@_StringType.f_construct.overload(("value", String, ""))
 def string_construct_identity(self, value:ScriptVariable[str]):
     return ScriptValue(self, value.get().inner)
 
-@_StringType.f_construct.overload(ScriptFunctionParam("value", [AnyType]))
+@_StringType.f_construct.overload(("value", [AnyType, NamePair]))
 def string_construct(self, value:ScriptVariable):
     v = value.get()
     try:
@@ -298,11 +298,11 @@ def string_construct(self, value:ScriptVariable):
         raise exceptions.TNotImplemented(f"str() for {v.type.name} is not implemented")
     return x
 
-@_BoolType.f_construct.overload(ScriptFunctionParam("value", [Bool]))
+@_BoolType.f_construct.overload(("value", Bool))
 def bool_construct_identity(self, value:ScriptVariable[bool]):
     return ScriptValue(self, value.get().inner)
 
-@_BoolType.f_construct.overload(ScriptFunctionParam("value", [AnyType]))
+@_BoolType.f_construct.overload(("value", [AnyType, NamePair]))
 def bool_construct(self, value:ScriptVariable):
     v = value.get()
     try:
@@ -317,19 +317,19 @@ def bool_construct(self, value:ScriptVariable):
         raise exceptions.TNotImplemented(f"bool() for {v.type.name} is not implemented")
     return x
 
-@_NameValuePairType.f_construct.overload(ScriptFunctionParam("name", [String]), ScriptFunctionParam("value", [AnyType]))
+@_NameValuePairType.f_construct.overload(("name", String), ("value", AnyType))
 def nvpair_construct(self, name:ScriptVariable[str], value:ScriptVariable):
     return ScriptValue(self, ScriptNameValuePair(name.get().inner, value.get().inner))
 
-@_PairType.f_construct.overload(ScriptFunctionParam("first", [AnyType]), ScriptFunctionParam("second", [AnyType]))
+@_PairType.f_construct.overload(("first", AnyType), ("second", AnyType))
 def pair_construct(self, first:ScriptVariable, second:ScriptVariable):
     return ScriptValue(self, _pair(first.get().inner, second.get().inner))
 
-@_ListType.f_construct.overload(ScriptFunctionParam("items", [AnyType,NamePair], pack=True))
+@_ListType.f_construct.overload(dict(name="items", dtypes=[AnyType,NamePair], pack=True))
 def list_construct(self, *items:ScriptVariable):
     return ScriptValue(self, [v.get().inner for v in items])
 
-@_MapType.f_construct.overload(ScriptFunctionParam("items", [Pair,NamePair], pack=True))
+@_MapType.f_construct.overload(dict(name="items", dtypes=[Pair,NamePair], pack=True))
 def map_construct(self, *items:ScriptVariable[_pair|ScriptNameValuePair]):
     d = {}
     for item in (v.get().inner for v in items):
@@ -339,7 +339,7 @@ def map_construct(self, *items:ScriptVariable[_pair|ScriptNameValuePair]):
             d[item.name] = item.value
     return ScriptValue(self, d)
 
-@_UUIDType.f_construct.overload(ScriptFunctionParam("hex", [String]))
+@_UUIDType.f_construct.overload(("hex", String))
 def uuid_construct(self, hex:ScriptVariable[str]):
     return ScriptValue(self, uuid.UUID(hex))
 
@@ -351,47 +351,77 @@ f_log = ScriptFunction()
 f_error = ScriptFunction()
 f_flush = ScriptFunction()
 
-@f_isinstance.overload(ScriptFunctionParam("value", [AnyType,NamePair]), ScriptFunctionParam("type", [Type]))
+@f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
     return ScriptValue(Bool, value.type().issubtype(script.DATA_TYPE_TABLE[t.get().inner]))
 
-@f_isinstance.overload(ScriptFunctionParam("value", [AnyType,NamePair]), ScriptFunctionParam("types", [Type], pack=True))
+@f_isinstance.overload(("value", [AnyType,NamePair]), dict(name="types", dtypes=[Type], pack=True))
 def function_isinstance2(value:ScriptVariable, *types:ScriptVariable[type]):
     return ScriptValue(Bool, value.type().issubtype(*(script.DATA_TYPE_TABLE[vr.get().inner] for vr in types)))
 
-@f_isinstance.overload(ScriptFunctionParam("x", [Type]), ScriptFunctionParam("type", [Type]))
+@f_isinstance.overload(("x", Type), ("type", Type))
 def function_isinstance(x:ScriptVariable[type], t:ScriptVariable[type]):
     return ScriptValue(Bool, script.DATA_TYPE_TABLE[x.get().inner].issubtype(script.DATA_TYPE_TABLE[t.get().inner]))
 
-@f_isinstance.overload(ScriptFunctionParam("x", [Type]), ScriptFunctionParam("types", [Type], pack=True))
+@f_isinstance.overload(("x", Type), dict(name="types", dtypes=[Type], pack=True))
 def function_isinstance2(x:ScriptVariable[type], *types:ScriptVariable[type]):
     return ScriptValue(Bool, script.DATA_TYPE_TABLE[x.get().inner].issubtype(*(script.DATA_TYPE_TABLE[vr.get().inner] for vr in types)))
 
-@f_has.overload(ScriptFunctionParam("name", [String]), pass_ctx=True)
+@f_has.overload(("name", String), pass_ctx=True)
 def function_has(ctx:ScriptContext, name:ScriptVariable[str]):
     return ScriptValue(Bool, ctx.stack.find_name(name.get().inner) is not None)
 
-@f_has.overload(ScriptFunctionParam("names", [String], pack=True), pass_ctx=True)
+@f_has.overload(dict(name="names", dtypes=[String], pack=True), pass_ctx=True)
 def function_has_plural(ctx:ScriptContext, *names:ScriptVariable[str]):
     return ScriptValue(List, [ctx.stack.find_name(name.get().inner) is not None for name in names])
 
-@f_has.overload(ScriptFunctionParam("names", [List]), pass_ctx=True)
+@f_has.overload(("names", List), pass_ctx=True)
 def function_has_plural(ctx:ScriptContext, *names:ScriptVariable[str]):
     return ScriptValue(List, [ctx.stack.find_name(name.get().inner) is not None for name in names])
 
-@f_hasfunc.overload(ScriptFunctionParam("name", [String]))
+@f_has.overload(("node", [JsonNode, JsonProxyRoot]), ("name", String))
+def function_has(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonProxyRoot], name:ScriptVariable[str]):
+    if isinstance(node, json_proxy.JsonProxyRoot):
+        data, _ = node.get().inner.get_data()
+    else:
+        data = node.get().inner.resolve()
+    if not isinstance(data, dict):
+        raise exceptions.TTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+    return ScriptValue(Bool, name.get().inner in data)
+
+@f_has.overload(("node", [JsonNode, JsonProxyRoot]), dict(name="names", dtypes=[String], pack=True))
+def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonProxyRoot], *names:ScriptVariable[str]):
+    if isinstance(node, json_proxy.JsonProxyRoot):
+        data, _ = node.get().inner.get_data()
+    else:
+        data = node.get().inner.resolve()
+    if not isinstance(data, dict):
+        raise exceptions.TTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+    return ScriptValue(List, [name.get().inner in data for name in names])
+
+@f_has.overload(("node", [JsonNode, JsonProxyRoot]), ("names", List))
+def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonProxyRoot], *names:ScriptVariable[str]):
+    if isinstance(node, json_proxy.JsonProxyRoot):
+        data, _ = node.get().inner.get_data()
+    else:
+        data = node.get().inner.resolve()
+    if not isinstance(data, dict):
+        raise exceptions.TTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+    return ScriptValue(List, [name.get().inner in data for name in names])
+
+@f_hasfunc.overload(("name", String))
 def function_hasfunc(name:ScriptVariable[str]):
     return ScriptValue(Bool, name in script.SCRIPT_FUNCTION_TABLE)
 
-@f_log.overload(ScriptFunctionParam("x", [AnyType], pack=True), ScriptFunctionParam("sep", [String], default=" "), ScriptFunctionParam("end", [String], default="\n"))
+@f_log.overload(dict(name="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, "\n"))
 def function_log(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
     print(*((xv:=xi.get()).type.conv_str(xv).inner for xi in x), sep=sep.get().inner, end=end.get().inner)
 
-@f_error.overload(ScriptFunctionParam("x", [AnyType], pack=True), ScriptFunctionParam("sep", [String], default=" "), ScriptFunctionParam("end", [String], default=""))
+@f_error.overload(dict(names="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, ""))
 def function_error(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
     raise exceptions.TUserException(f"{sep.get().inner.join((xv:=xi.get()).type.conv_str(xv).inner for xi in x)}{end.get().inner}")
 
-@f_flush.overload(ScriptFunctionParam("flushable", [JsonProxyRoot]))
+@f_flush.overload(("flushable", JsonProxyRoot))
 def function_flush_json_proxy_root(flushable:ScriptVariable[json_proxy.JsonProxyRoot]):
     root = flushable.get().inner
     root.merge_changes()
