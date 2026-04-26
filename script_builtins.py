@@ -2,7 +2,9 @@ from . import exceptions, json_proxy, script, utils
 from .script import *
 from .utils import ScriptFunction
 
+import asyncio
 import string
+import time
 import uuid
 
 class _TypeType(ScriptDataType[type]):
@@ -350,6 +352,7 @@ f_hasfunc = ScriptFunction()
 f_log = ScriptFunction()
 f_error = ScriptFunction()
 f_flush = ScriptFunction()
+f_wait = ScriptFunction()
 
 @f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
@@ -417,7 +420,7 @@ def function_hasfunc(name:ScriptVariable[str]):
 def function_log(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
     print(*((xv:=xi.get()).type.conv_str(xv).inner for xi in x), sep=sep.get().inner, end=end.get().inner)
 
-@f_error.overload(dict(names="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, ""))
+@f_error.overload(dict(name="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, ""))
 def function_error(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
     raise exceptions.TUserException(f"{sep.get().inner.join((xv:=xi.get()).type.conv_str(xv).inner for xi in x)}{end.get().inner}")
 
@@ -426,6 +429,15 @@ def function_flush_json_proxy_root(flushable:ScriptVariable[json_proxy.JsonProxy
     root = flushable.get().inner
     root.merge_changes()
     return true
+
+@f_wait.overload(("seconds", [Integer, Float]))
+def function_wait(seconds:ScriptVariable[int|float]):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        time.sleep(seconds.get().inner)
+    else:
+        return asyncio.sleep(seconds.get().inner)
 
 def activate():
     script.DATA_TYPE_TABLE[NullType.inner] = NullType
@@ -440,3 +452,5 @@ def activate():
     script.SCRIPT_FUNCTION_TABLE["hasfunc"] = f_hasfunc
     script.SCRIPT_FUNCTION_TABLE["log"] = f_log
     script.SCRIPT_FUNCTION_TABLE["error"] = f_error
+    script.SCRIPT_FUNCTION_TABLE["flush"] = f_flush
+    script.SCRIPT_FUNCTION_TABLE["wait"] = f_wait

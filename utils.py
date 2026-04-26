@@ -324,3 +324,43 @@ class BoundScriptFunction[T](ScriptFunction[T]):
             return cb(self.instance, ctx, *args, **kwargs)
         else:
             return cb(self.instance, *args, **kwargs)
+        
+class _serialized_value:
+    @classmethod
+    def serialize(cls, value:ScriptValue):
+        return cls(value.type.inner, value.type.serialize(value), a=isinstance(value, ScriptValueAwaitable))
+    
+    def __init__(self, t:type, v, a:bool=False):
+        self.t = t
+        self.v = v
+        self.a = a
+
+    def deserialize(self):
+        val = wrap_python_type(self.t).deserialize(self.v)
+        if self.a:
+            return awaitable(val)
+        else:
+            return val
+    
+    def __getstate__(self)->dict[str]:
+        rtv = {
+            "t": self.t,
+            "v": self.v,
+        }
+        if self.a:
+            rtv["a"] = self.a
+        return rtv
+    
+    def __setstate__(self, d:dict[str]):
+        self.t = d["t"]
+        self.v = d["v"]
+        self.a = bool(d.get("a", False))
+
+
+SerializedNamespace = dict[str, _serialized_value]
+
+def serialize_namespace(space:Namespace)->SerializedNamespace:
+    return {name:_serialized_value.serialize(var.get()) for name, var in space.items()}
+
+def deserialize_namespace(space:SerializedNamespace)->Namespace:
+    return {name:sval.deserialize() for name, sval in space.items()}

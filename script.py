@@ -66,6 +66,24 @@ class ScriptDataType[T]:
             c = c.parent
         return False
 
+    def serialize(self, value:ScriptValue[T])->Any:
+        x = value.inner
+        if hasattr(x, "__getstate__"):
+            state = x.__getstate__()
+            if state is not None:
+                return state
+        return x
+    
+    def deserialize(self, x:Any)->ScriptValue[T]:
+        v = self.inner.__new__(self.inner)
+        if hasattr(v, "__setstate__"):
+            v.__setstate__(x)
+            return ScriptValue(self, v)
+        elif isinstance(x, self.inner):
+            return ScriptValue(self, x)
+        else:
+            raise exceptions.TTypeError(f"could not deserialize data for type {self.name}")
+
     def construct(self, ctx:"ScriptContext")->ScriptValue:
         return ScriptValue(self, self.inner.__new__())
     
