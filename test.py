@@ -21,16 +21,36 @@ script_builtins.activate()
 async def _print_async(x:ScriptValue):
     print(x.type.conv_str(x).inner)
 
-@utils.async_function
 def test_async(ctx:ScriptContext):
     x = ctx.params[0].get()
     return _print_async(x)
 
+
+async def async_returner(ctx:ScriptContext):
+    return wrap_python_value(ctx.params[0].get().inner + 1)
+
 SCRIPT_FUNCTION_TABLE["test_async"] = test_async
+SCRIPT_FUNCTION_TABLE["async_returner"] = async_returner
+SCRIPT_FUNCTION_TABLE["await"] = lambda ctx: ctx.params[0].get()
 
 raw = r"""
 
-log("hello world")
+x = 2;
+
+if x < 2 {
+    log(x, "< 2")
+} else if x > 2 {
+    log(x, "> 2")
+} else {
+    log(x, "== 2");
+    global y
+    y = async_returner(3)
+}
+
+log(has("x"), has("y"), has("z"))
+if has("y") {
+    log(x + 2 * y / 3 % x*x)
+}
 
 """
 

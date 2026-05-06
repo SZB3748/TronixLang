@@ -1,6 +1,7 @@
 from .exceptions import *
 from .script import *
 from . import script
+import asyncio
 from typing import Iterable
 
 import inspect
@@ -15,26 +16,6 @@ def generate_exception_help(raw:str, e:TronixException)->str:
     elif isinstance(e, TRuntimeException):
         ...
     return "".join(s)
-
-def awaitable(v:ScriptValue|Any):
-    if isinstance(v, ScriptValueAwaitable):
-        return v
-    elif not isinstance(v, ScriptValue):
-        if inspect.isawaitable(v):
-            return ScriptValueAwaitable(wrap_python_type(type(v)), v)
-    elif inspect.isawaitable(v.inner):
-        return ScriptValueAwaitable(v.type, v.inner)
-
-def async_function(f):
-    def async_function_wrapper(ctx:ScriptContext):
-        v = f(ctx)
-        if v is None or v is NotImplemented:
-            return v
-        else:
-            return awaitable(v)
-    async_function_wrapper.__name__ = f.__name__
-    async_function_wrapper.__doc__ = f.__doc__
-    return async_function_wrapper
 
 def add_type(dt:ScriptDataType, constructor:bool=True):
     script.DATA_TYPE_TABLE[dt.inner] = dt
@@ -74,41 +55,24 @@ class ScriptRunner:
         
         return s
 
-    def run_iter(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
+    async def run_async(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
         s = self._prep(s, force_parse, force_compile)
 
-        def _next(steps:Iterable[Callable[[], Any]]):
+        async def _next(steps:Iterable[Callable[[], Awaitable]]):
             for step in steps:
-                x = step()
+                x = await step()
                 if isinstance(x, script._step_expansion):
                     if x.new_ns_stackframe:
                         s.stack = script.ns_stack({}, s.stack)
-                    yield from _next(x.steps)
+                    await _next(x.steps)
                     if x.new_ns_stackframe:
                         s.stack = s.stack.prev
-                else:
-                    yield x
-        yield from _next(s.steps)
+
+        await _next(s.steps)
 
     def run(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
-        s = self._prep(s, force_parse, force_compile)
-
-        def _next(steps:Iterable[Callable[[], Any]]):
-            for step in steps:
-                x = step()
-                if isinstance(x, script._step_expansion):
-                    if x.new_ns_stackframe:
-                        s.stack = script.ns_stack({}, s.stack)
-                    _next(x)
-                    if x.new_ns_stackframe:
-                        s.stack = s.stack.prev
-
-        _next(s.steps)
-
-    async def run_async(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
-        for result in self.run_iter(s, force_parse, force_compile):
-            if inspect.isawaitable(result):
-                await result
+        loop = asyncio.new_event_loop()
+        loop.run_until_complete(self.run_async(s, force_parse, force_compile))
 
     def add_script_end_cb(self, f:Callable[[Script],Any]):
         self.script_end_cbs.append(f)
@@ -328,33 +292,24 @@ class BoundScriptFunction[T](ScriptFunction[T]):
 class _serialized_value:
     @classmethod
     def serialize(cls, value:ScriptValue):
-        return cls(value.type.inner, value.type.serialize(value), a=isinstance(value, ScriptValueAwaitable))
+        return cls(value.type.inner, value.type.serialize(value))
     
-    def __init__(self, t:type, v, a:bool=False):
+    def __init__(self, t:type, v):
         self.t = t
         self.v = v
-        self.a = a
 
     def deserialize(self):
-        val = wrap_python_type(self.t).deserialize(self.v)
-        if self.a:
-            return awaitable(val)
-        else:
-            return val
+        return wrap_python_type(self.t).deserialize(self.v)
     
     def __getstate__(self)->dict[str]:
-        rtv = {
+        return {
             "t": self.t,
             "v": self.v,
         }
-        if self.a:
-            rtv["a"] = self.a
-        return rtv
     
     def __setstate__(self, d:dict[str]):
         self.t = d["t"]
         self.v = d["v"]
-        self.a = bool(d.get("a", False))
 
 
 SerializedNamespace = dict[str, _serialized_value]
