@@ -4,7 +4,6 @@ from .utils import ScriptFunction
 
 import asyncio
 import string
-import time
 import uuid
 
 class _TypeType(ScriptDataType[type]):
@@ -431,13 +430,8 @@ def function_flush_json_proxy_root(flushable:ScriptVariable[json_proxy.JsonProxy
     return true
 
 @f_wait.overload(("seconds", [Integer, Float]))
-def function_wait(seconds:ScriptVariable[int|float]):
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        time.sleep(seconds.get().inner)
-    else:
-        return asyncio.sleep(seconds.get().inner)
+async def function_wait(seconds:ScriptVariable[int|float]):
+    await asyncio.sleep(seconds.get().inner)
 
 def activate():
     script.DATA_TYPE_TABLE[NullType.inner] = NullType

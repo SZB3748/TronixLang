@@ -71,8 +71,7 @@ class ScriptRunner:
         await _next(s.steps)
 
     def run(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(self.run_async(s, force_parse, force_compile))
+        asyncio.run(self.run_async(s, force_parse, force_compile))
 
     def add_script_end_cb(self, f:Callable[[Script],Any]):
         self.script_end_cbs.append(f)

@@ -254,13 +254,11 @@ class _variable_access:
         if not subpath:
             return target
         
-        print(target)
         if isinstance(target, ScriptVariable):
             target = target.get()
         for name in subpath:
             x = target.type
             target = target.type.getattr(target, name)
-            print(x, name, target)
         return target
 
 class _step_evaluation:
@@ -940,7 +938,8 @@ class Script:
                     raise exceptions.TMustEvaluate("if statement condition must evaluate but resulted in no value")
                 if v.type.conv_bool(v).inner:
                     return await block_cb()
-            return await last()
+            if last:
+                return await last()
 
         if rtv is None:
             self.steps_stack.steps.append(_step)
