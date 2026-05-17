@@ -327,7 +327,7 @@ _operator_direction = {
 
 _operator_order_index = {k:i for i, so in enumerate(_operator_order) for k in so} #maps each operator to the index of its order set
 
-BASE_TYPE = ScriptDataType("object", object, None); BASE_TYPE.parent = BASE_TYPE
+BASE_TYPE = ScriptDataType("any", object, None); BASE_TYPE.parent = BASE_TYPE
 
 DATA_TYPE_TABLE:dict[type, ScriptDataType] = {
     object: BASE_TYPE
