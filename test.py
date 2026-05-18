@@ -47,7 +47,7 @@ if x < 2 {
     y = async_returner(3)
 }
 
-log(has("x"), has("y"), has("z"))
+log(has("x"), has("y"), has("z"));
 if has("y") {
     log(x + 2 * y / 3 % x*x)
 }

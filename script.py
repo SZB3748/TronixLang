@@ -400,12 +400,10 @@ class Script:
         def end_condition():
             nonlocal current
             if isinstance(current, ParsingNodeConditionPair):
-                if current.condition is not None:
+                #if has condition and missing codeblock
+                if current.condition is not None and current.codeblock is None:
                     raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
-                elif current.codeblock is None:
-                    if not current.takes_condition:
-                        raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
-                else:
+                elif current.codeblock is not None: #if has codeblock
                     current = current.parent.parent
 
         def wrap_statement():
@@ -455,6 +453,8 @@ class Script:
                             current.takes_condition = True
                             i += r.end() - i
                             continue
+                        elif current.takes_condition == (current.condition is not None) and current.codeblock is not None:
+                            current = current.parent.parent
                         else:
                             raise exceptions.TUnexpectedKeyword("keyword \"if\" not expected here", target=(i, r))
                     if isinstance(current, ParsingNodeExpression):
@@ -620,6 +620,7 @@ class Script:
                 raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
             elif r["semicolon"] is not None:
                 fail_global()
+                end_condition()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)) or look_nvpair():
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
                 while current is not None:
