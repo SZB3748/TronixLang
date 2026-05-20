@@ -3,6 +3,7 @@ from .script import *
 from .utils import ScriptFunction
 
 import asyncio
+import json
 import string
 import uuid
 
@@ -352,6 +353,8 @@ f_log = ScriptFunction()
 f_error = ScriptFunction()
 f_flush = ScriptFunction()
 f_wait = ScriptFunction()
+f_format_json = ScriptFunction()
+f_parse_json = ScriptFunction()
 
 @f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
@@ -433,6 +436,20 @@ def function_flush_json_proxy_root(flushable:ScriptVariable[json_proxy.JsonProxy
 async def function_wait(seconds:ScriptVariable[int|float]):
     await asyncio.sleep(seconds.get().inner)
 
+@f_format_json.overload(("value", AnyType), ("serialize", Bool, True))
+def function_format_json(value:ScriptVariable[Any], serialize:ScriptVariable[bool]):
+    v = value.get()
+    x = v.inner
+    if serialize.get().inner or not (x is None or isinstance(x, (str, int, float, bool, list, dict))):
+        x = v.type.serialize(v)
+    
+    return ScriptValue(String, json.dumps(x))
+
+@f_parse_json.overload(("json_string", String))
+def function_parse_json(value:ScriptVariable[str]):
+    return script.wrap_python_value(json.loads(value.get().inner))
+
+
 def activate():
     script.DATA_TYPE_TABLE[NullType.inner] = NullType
     script.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly
@@ -448,3 +465,5 @@ def activate():
     script.SCRIPT_FUNCTION_TABLE["error"] = f_error
     script.SCRIPT_FUNCTION_TABLE["flush"] = f_flush
     script.SCRIPT_FUNCTION_TABLE["wait"] = f_wait
+    script.SCRIPT_FUNCTION_TABLE["format_json"] = f_format_json
+    script.SCRIPT_FUNCTION_TABLE["parse_json"] = f_parse_json

@@ -290,25 +290,30 @@ class BoundScriptFunction[T](ScriptFunction[T]):
         
 class _serialized_value:
     @classmethod
-    def serialize(cls, value:ScriptValue):
-        return cls(value.type.inner, value.type.serialize(value))
+    def serialize(cls, value:ScriptValue, type_str:bool=False):
+        return cls(value.type.inner, value.type.serialize(value), type_str=type_str)
     
-    def __init__(self, t:type, v):
+    def __init__(self, t:type, v, type_str:bool=False):
         self.t = t
         self.v = v
+        self.type_str = type_str
 
     def deserialize(self):
-        return wrap_python_type(self.t).deserialize(self.v)
+        if isinstance(self.t, str):
+            return script._map_name_to_type(self.t).deserialize(self.v)
+        else:
+            return wrap_python_type(self.t).deserialize(self.v)
     
     def __getstate__(self)->dict[str]:
         return {
-            "t": self.t,
+            "t": script.wrap_python_type(self.t).name if self.type_str else self.t,
             "v": self.v,
         }
     
     def __setstate__(self, d:dict[str]):
         self.t = d["t"]
         self.v = d["v"]
+        self.type_str = isinstance(self.t, str)
 
 
 SerializedNamespace = dict[str, _serialized_value]
