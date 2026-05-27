@@ -4,7 +4,9 @@ from .utils import ScriptFunction
 
 import asyncio
 import json
+import mimetypes
 import string
+from typing import BinaryIO
 import uuid
 
 class _TypeType(ScriptDataType[type]):
@@ -408,6 +410,8 @@ f_flush = ScriptFunction()
 f_wait = ScriptFunction()
 f_format_json = ScriptFunction()
 f_parse_json = ScriptFunction()
+f_read = ScriptFunction()
+f_write = ScriptFunction()
 
 @f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
@@ -502,6 +506,57 @@ def function_format_json(value:ScriptVariable[Any], serialize:ScriptVariable[boo
 def function_parse_json(value:ScriptVariable[str]):
     return script.wrap_python_value(json.loads(value.get().inner))
 
+def _read_file_plaintext(file:BinaryIO, mimetype:str):
+    return script.ScriptValue(String, file.read().decode("utf-8"))
+    
+def _write_file_plaintext(file:BinaryIO, mimetype:str, var:ScriptVariable):
+    value = var.get()
+    file.write(value.type.conv_str(value).inner.encode("utf-8"))
+
+def _read_file_json(file:BinaryIO, mimetype:str):
+    return script.wrap_python_value(json.load(file))
+    
+def _write_file_json(file:BinaryIO, mimetype:str, var:ScriptVariable, options:dict[str]={}):
+    options.setdefault("indent", 4)
+    json.dump(var.get().inner, file, **options)
+
+ReadBehavior = Callable[[BinaryIO, str], script.ScriptValue]
+WriteBehavior = Callable[[BinaryIO, str, ScriptVariable], None|ScriptValue]
+
+_default_read_behaviors:dict[str, ReadBehavior] = {}
+_default_write_behaviors:dict[str, tuple[WriteBehavior, list[ScriptDataType]]] = {}
+
+def add_read_behavior(mimetype:str, behavior:ReadBehavior):
+    _default_read_behaviors[mimetype] = behavior
+
+def add_write_behavior(mimetype:str, behavior:WriteBehavior, types:list[ScriptDataType]|None=None):
+    _default_write_behaviors[mimetype] = behavior, ([AnyType] if types is None else types)
+
+def _read_file(file:BinaryIO, ext:str, mimetype:str=None):
+    if mimetype is None:
+        mimetype = mimetypes.guess_type(f"x.{ext}", strict=False)
+    behavior = _default_read_behaviors.get(mimetype, _read_file_plaintext)
+    return behavior(file, mimetype)
+
+def _write_file(file:BinaryIO, ext:str, value:ScriptVariable, mimetype:str=None):
+    if mimetype is None:
+        mimetype = mimetypes.guess_type(f"x.{ext}", strict=False)
+    behavior, types = _default_write_behaviors.get(mimetype, (_write_file_plaintext, [AnyType]))
+    if value.type().issubtype(*types):
+        return behavior(file, mimetype, value)
+    raise exceptions.TTypeError(f"expected to write {repr(ext)} file using value of type: {",".join(t.name for t in types)}; got value {value.type().repr(value)} of type {value.type().name}")
+
+@f_read.overload(("path", String))
+def read_file_path(path:ScriptVariable[str]):
+    p = path.get().inner
+    with open(p, "rb") as f:
+        return _read_file(f, p.rsplit(".",1)[-1])
+
+@f_write.overload(("path", String), ("value", AnyType))
+def write_file_path(path:ScriptVariable[str], value:ScriptVariable):
+    p = path.get().inner
+    with open(p, "wb") as f:
+        return _write_file(f, p.rsplit(".",1)[-1], value)
 
 def activate():
     script.DATA_TYPE_TABLE[NullType.inner] = NullType
@@ -510,6 +565,10 @@ def activate():
         utils.add_type(dt)
     utils.add_type(JsonProxyRoot, constructor=False)
     utils.add_type(JsonNode, constructor=False)
+
+    add_read_behavior("application/json", _read_file_json)
+    add_write_behavior("application/json", _write_file_json)
+
     script.SCRIPT_FUNCTION_TABLE["isinstance"] = f_isinstance
     script.SCRIPT_FUNCTION_TABLE["issubtype"] = f_issubtype
     script.SCRIPT_FUNCTION_TABLE["has"] = f_has
@@ -520,3 +579,5 @@ def activate():
     script.SCRIPT_FUNCTION_TABLE["wait"] = f_wait
     script.SCRIPT_FUNCTION_TABLE["format_json"] = f_format_json
     script.SCRIPT_FUNCTION_TABLE["parse_json"] = f_parse_json
+    script.SCRIPT_FUNCTION_TABLE["read"] = f_read
+    script.SCRIPT_FUNCTION_TABLE["write"] = f_write
