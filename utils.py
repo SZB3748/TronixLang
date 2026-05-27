@@ -291,18 +291,21 @@ class BoundScriptFunction[T](ScriptFunction[T]):
 class _serialized_value:
     @classmethod
     def serialize(cls, value:ScriptValue, type_str:bool=False):
-        return cls(value.type.inner, value.type.serialize(value), type_str=type_str)
+        return cls(value.type.inner, value.type.serialize(value, type_str=type_str), type_str=type_str)
     
     def __init__(self, t:type, v, type_str:bool=False):
         self.t = t
         self.v = v
         self.type_str = type_str
 
-    def deserialize(self):
+    def _deserialize(self):
         if isinstance(self.t, str):
             return script._map_name_to_type(self.t).deserialize(self.v)
         else:
-            return wrap_python_type(self.t).deserialize(self.v)
+            return script.wrap_python_type(self.t).deserialize(self.v)
+
+    def deserialize(self)->ScriptValue:
+        return script.wrap_python_value(self._deserialize())
     
     def __getstate__(self)->dict[str]:
         return {
@@ -323,3 +326,16 @@ def serialize_namespace(space:Namespace)->SerializedNamespace:
 
 def deserialize_namespace(space:SerializedNamespace)->Namespace:
     return {name:sval.deserialize() for name, sval in space.items()}
+
+
+def serialize_value(value, type_str:bool=False):
+    return _serialized_value.serialize(script.wrap_python_value(value), type_str=type_str).__getstate__()
+
+def deserialize_value(value:dict[str]):
+    ser = _serialized_value.__new__(_serialized_value)
+    ser.__setstate__(value)
+    return ser.deserialize()
+
+def serialize_value_headless(value, type_str:bool=False):
+    v = script.wrap_python_value(value)
+    return v.type.serialize(v, type_str=type_str)

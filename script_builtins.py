@@ -16,6 +16,12 @@ class _TypeType(ScriptDataType[type]):
         return ScriptValue(String, f"<type {self.name} at {hex(id(value))}>")
     
 class _NullType(ScriptDataType[None]):
+    def serialize(self, value, type_str=False):
+        return None
+    
+    def deserialize(self, x):
+        return None
+
     def repr(self, value):
         return ScriptValue(String, "null")
 
@@ -63,6 +69,15 @@ class _NameValuePairType(ScriptDataType[ScriptNameValuePair]):
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
 
+    def serialize(self, value, type_str=False):
+        return dict(name=value.inner.name, value=utils.serialize_value(script.wrap_python_value(value.inner.value), type_str=type_str))
+
+    def deserialize(self, x):
+        v = self.inner.__new__(self.inner)
+        v.name = x["name"]
+        v.value = utils.deserialize_value(x["value"]).inner
+        return v
+
     def repr(self, value):
         n = value.inner.name
         v = value.inner.value
@@ -104,6 +119,19 @@ class _PairType(ScriptDataType[_pair]):
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
 
+    def serialize(self, value, type_str=False):
+        return dict(
+            first=utils.serialize_value(value.inner.first, type_str=type_str),
+            second=utils.serialize_value(value.inner.second, type_str=type_str)
+        )
+    
+    def deserialize(self, x):
+        v = self.inner.__new__(self.inner)
+        v.first = utils.deserialize_value(x["first"]).inner
+        v.second = utils.deserialize_value(x["second"]).inner
+        return v
+
+
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({(fv:=wrap_python_value(value.inner.first)).type.repr(fv).inner}, {(sv:=wrap_python_value(value.inner.second)).type.repr(sv).inner})")
     
@@ -112,6 +140,15 @@ class _ListType(ScriptDataType[list]):
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
 
+    def serialize(self, value, type_str=False):
+        x = [utils.serialize_value(xi, type_str=type_str) for xi in value.inner]
+        return x
+    
+    def deserialize(self, x):
+        l = self.inner.__new__(self.inner)
+        l.__init__()
+        return l.extend(utils.deserialize_value(xi).inner for xi in x)
+
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({", ".join((v:=wrap_python_value(x)).type.repr(v).inner for x in value.inner)})")
     
@@ -119,6 +156,16 @@ class _MapType(ScriptDataType[dict]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
+
+    def serialize(self, value, type_str=False):
+        return [(utils.serialize_value(k, type_str=type_str), utils.serialize_value(v, type_str=type_str)) for k,v in value.inner.items()]
+    
+    def deserialize(self, x):
+        d = self.inner.__new__(self.inner)
+        d.__init__()
+        for k,v in x:
+            d[utils.deserialize_value(k).inner] = utils.deserialize_value(v).inner
+        return d
 
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({", ".join((k:=wrap_python_value(kx)).type.repr(k).inner + ": " + (v:=wrap_python_value(vx)).type.repr(v).inner for kx, vx in value.inner.items())})")
@@ -138,6 +185,12 @@ class _UUIDType(ScriptDataType[uuid.UUID]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
+
+    def serialize(self, value, type_str=False):
+        return str(value)
+    
+    def deserialize(self, x):
+        return uuid.UUID(x)
 
     def getattr(self, obj, name):
         raise AttributeError(repr(name))
