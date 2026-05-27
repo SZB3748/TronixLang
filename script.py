@@ -6,7 +6,7 @@ import inspect
 import re
 from typing import Any, Awaitable, Callable, Self
 
-KEYWORDS = {"if","else","global"}
+KEYWORDS = {"if","else","global","var"}
 
 PATTERN_NAME = r"(?:[a-zA-Z_][a-zA-Z0-9_]*)"
 PATTERN_OPERATOR = r"(?:\.|[+\-*\/%=><\!]=?)"
@@ -63,7 +63,7 @@ class ScriptDataType[T]:
             c = c.parent
         return False
 
-    def serialize(self, value:ScriptValue[T])->Any:
+    def serialize(self, value:ScriptValue[T], type_str:bool=False)->Any:
         x = value.inner
         if hasattr(x, "__getstate__"):
             state = x.__getstate__()
@@ -71,7 +71,7 @@ class ScriptDataType[T]:
                 return state
         return x
     
-    def deserialize(self, x:Any)->ScriptValue[T]:
+    def deserialize(self, x:Any)->T|ScriptValue[T]:
         v = self.inner.__new__(self.inner)
         if hasattr(v, "__setstate__"):
             v.__setstate__(x)
@@ -431,8 +431,8 @@ class Script:
                     raise exceptions.TExpectedEvaluable("expected evaluable expression as value for name-value pair", target=(current.match.pos, current.match))
                 current = looknode.parent
 
-        def fail_global():
-            if isinstance(current, ParsingNodeGlobalStatement):
+        def fail_vardecl():
+            if isinstance(current, ParsingNodeVarDecl):
                 raise exceptions.TExpectedName("expected variable name", target=(current.match.pos, current.match))
             
             
@@ -447,7 +447,7 @@ class Script:
                 if look_nvpair():
                     raise exceptions.TUnexpectedKeyword(f"keyword not expected here", target=(i, r))
                 if keyword == "if":
-                    fail_global()
+                    fail_vardecl()
                     if isinstance(current, ParsingNodeConditionPair):
                         if current.condition is None and current.codeblock is None:
                             current.takes_condition = True
@@ -467,7 +467,7 @@ class Script:
                     current.children.append(node)
                     current = cond
                 elif keyword == "else":
-                    fail_global()
+                    fail_vardecl()
                     while current is not None:
                         if isinstance(current, ParsingNodeConditionPair):
                             break
@@ -478,16 +478,16 @@ class Script:
                     cond = ParsingNodeConditionPair(r, current)
                     current.children.append(cond)
                     current = cond
-                elif keyword == "global":
-                    fail_global()
+                elif keyword in ("global", "var"):
+                    fail_vardecl()
                     if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
-                        raise exceptions.TUnexpectedKeyword("keyword \"global\" not expected here", target=(i, r))
-                    node = ParsingNodeGlobalStatement(r, current)
+                        raise exceptions.TUnexpectedKeyword(f"keyword {repr(keyword)} not expected here", target=(i, r))
+                    node = ParsingNodeVarDecl(r, keyword, current)
                     current.children.append(node)
                     current = node
                 i += r.end() - i
             elif r["function"] is not None:
-                fail_global()
+                fail_vardecl()
                 wrap_statement()
                 node = ParsingNodeFunction(r["function_name"], r, current)
                 current.children.append(node)
@@ -495,7 +495,7 @@ class Script:
                 current = node
                 i += r.end() - i
             elif r["name_value_pair"] is not None:
-                fail_global()
+                fail_vardecl()
                 name = r["name_value_pair_name"]
                 wrap_statement()
                 nvpair = ParsingNodeNVPair(r, current)
@@ -514,13 +514,13 @@ class Script:
                 v_null = r["value_null"]
                 escape_current = False
                 if v_name:
-                    if isinstance(current, ParsingNodeGlobalStatement):
+                    if isinstance(current, ParsingNodeVarDecl):
                         escape_current = True
                     else:
                         wrap_statement()
                     node = ParsingNodeName(v_name, r, current)
                 else:
-                    fail_global()
+                    fail_vardecl()
                     wrap_statement()
                     if v_string:
                         vs = v_string[1:-1] #strip off the quotes
@@ -569,13 +569,13 @@ class Script:
                 end_nvpair()
                 i += r.end() - i
             elif (operator := r["operator"]) is not None:
-                fail_global()
+                fail_vardecl()
                 wrap_statement()
                 node = ParsingNodeOperator(operator, r, current)
                 current.children.append(node)
                 i += r.end() - i
             elif r["parenthesis"] is not None:
-                fail_global()
+                fail_vardecl()
                 end_condition()
                 node = ParsingNodeParentheses(r, current)
                 current.children.append(node)
@@ -583,7 +583,7 @@ class Script:
                 current = node
                 i += r.end() - i
             elif r["codeblock"] is not None:
-                fail_global()
+                fail_vardecl()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
                     raise exceptions.TUnexpectedSymbol("{ unexpected here", target=(i, r))
                 if isinstance(current, ParsingNodeExpression):
@@ -600,7 +600,7 @@ class Script:
                 current = node
                 i += r.end() - i
             elif (enclend := r["enclend"]) is not None:
-                fail_global()
+                fail_vardecl()
                 if enclstack is None:
                     raise exceptions.TEnclMismatch(f"unmatched {enclend}", target=(i, r))
                 elif enclstack.end != enclend:
@@ -610,7 +610,7 @@ class Script:
                 end_nvpair()
                 i += r.end() - i
             elif r["comma"] is not None:
-                fail_global()
+                fail_vardecl()
                 if enclstack is not None or look_nvpair():
                     if isinstance(enclstack.pnode, ParsingNodeFunction):
                         current = enclstack.pnode
@@ -619,7 +619,7 @@ class Script:
                         continue
                 raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
             elif r["semicolon"] is not None:
-                fail_global()
+                fail_vardecl()
                 end_condition()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)) or look_nvpair():
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
@@ -635,7 +635,7 @@ class Script:
             elif isinstance(current, ParsingNodeConditionPair) and current.codeblock is None:
                 raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
             else:
-                fail_global()
+                fail_vardecl()
                 return root
 
     def _generate_function_call_step(self, node:ParsingNodeFunction, params:list[Callable[[], Awaitable]]):
@@ -950,15 +950,15 @@ class Script:
 
     def _generate_codeblock_steps(self, node:ParsingNodeCodeBlock):
         nonetype = type(None)
-        def _resolve_global(node:ParsingNodeGlobalStatement):
+        def _resolve_vardelc(node:ParsingNodeVarDecl, target_ns:Namespace):
             assert node.name is not None
             name = node.name.name
             async def _step():
                 ns = self.stack.find_name(name)
                 if ns is None:
-                    self.global_scope[name] = ScriptVariable(DATA_TYPE_TABLE[nonetype])
-                elif ns is not self.global_scope:
-                    self.global_scope[name] = ns.pop(name)
+                    target_ns[name] = ScriptVariable(DATA_TYPE_TABLE[nonetype])
+                elif ns is not target_ns:
+                    target_ns[name] = ns.pop(name)
 
             self.steps_stack.steps.append(_step)
 
@@ -971,8 +971,8 @@ class Script:
                 self._generate_codeblock_steps(child)
             elif isinstance(child, ParsingNodeIfStatement):
                 self._generate_if_statement_steps(child)
-            elif isinstance(child, ParsingNodeGlobalStatement):
-                _resolve_global(child)
+            elif isinstance(child, ParsingNodeVarDecl):
+                _resolve_vardelc(child, self.scope if child.kw == "var" else self.global_scope)
 
     def compile(self, tree:ParsingNode):
         if self.steps:

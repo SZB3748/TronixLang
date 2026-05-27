@@ -126,9 +126,10 @@ class ParsingNodeNVPair(ParsingNode):
                 self.children.append(None)
             self.children.append(value)
 
-class ParsingNodeGlobalStatement(ParsingNode):
-    def __init__(self, match:Match, parent:ParsingNode|None=None, name:ParsingNodeName|None=None):
+class ParsingNodeVarDecl(ParsingNode):
+    def __init__(self, match:Match, kw:str, parent:ParsingNode|None=None, name:ParsingNodeName|None=None):
         super().__init__(match, parent, [])
+        self.kw = kw
         if name is not None:
             self.children.append(name)
 
