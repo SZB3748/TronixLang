@@ -225,9 +225,10 @@ class ns_stack:
             node = node.prev
 
 class ScriptContext:
-    def __init__(self, stack:ns_stack, params:list[ScriptVariable]):
+    def __init__(self, stack:ns_stack, params:list[ScriptVariable], script:"Script"):
         self.stack = stack
         self.params = params
+        self.script = script
 
 FunctionTable = dict[str, Callable[[ScriptContext], ScriptValue]]
 
@@ -679,7 +680,7 @@ class Script:
                     if isinstance(param, _variable_access):
                         x = param.resolve(self.stack)
                         if x is None:
-                            raise exceptions.TMissingName(f"{repr(".".join(param.name_path))} not found")
+                            raise exceptions.TMissingName(f"{repr(param.name_path[0])} not found")
                         else:
                             param = x
                     if isinstance(param, ScriptValue):
@@ -688,7 +689,7 @@ class Script:
 
                 local_ns = {}
                 self.stack = ns_stack(local_ns, self.stack) #push
-                ctx = ScriptContext(stack=self.stack, params=evaluated_params)
+                ctx = ScriptContext(stack=self.stack, params=evaluated_params, script=self)
                 try:
                     value = function(ctx)
                     if inspect.isawaitable(value):
@@ -1070,7 +1071,7 @@ async def _resolve_ih(script:Script, h, make_name_if_missing:bool=False, get_att
         if get_attr and len(h.name_path) > 1:
             x = h.resolve(script.stack, -1)
             if x is None:
-                raise exceptions.TMissingName(f"{repr(".".join(h.name_path[:-2]))} not found")
+                raise exceptions.TMissingName(f"{repr(h.name_path[0])} not found")
             elif isinstance(x, ScriptVariable):
                 return x.get(), h.name_path[-1]
             else:

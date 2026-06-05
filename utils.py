@@ -41,6 +41,7 @@ def remove_type(dt:ScriptDataType):
 class ScriptRunner:
     def __init__(self):
         self.parse_trees:dict[bytes, ParsingNode] = {}
+        self.script_start_cbs:list[Callable[[Script],Any]] = []
         self.script_end_cbs:list[Callable[[Script],Any]] = []
 
     def _prep(self, s:Script|str, force_parse:bool, force_compile:bool):
@@ -59,6 +60,12 @@ class ScriptRunner:
         
         return s
 
+    async def _run_cbs(self, s:Script, cbs:list[Callable[[Script],Any]]):
+        for cb in cbs:
+            c = cb(s)
+            if inspect.isawaitable(c):
+                await c
+
     async def run_async(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
         s = self._prep(s, force_parse, force_compile)
 
@@ -72,15 +79,24 @@ class ScriptRunner:
                     if x.new_ns_stackframe:
                         s.stack = s.stack.prev
 
+        await self._run_cbs(s, self.script_start_cbs)
         await _next(s.steps)
+        await self._run_cbs(s, self.script_end_cbs)
 
     def run(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
         asyncio.run(self.run_async(s, force_parse, force_compile))
+
+    def add_script_start_cb(self, f:Callable[[Script],Any]):
+        self.script_start_cbs.append(f)
+        return f
 
     def add_script_end_cb(self, f:Callable[[Script],Any]):
         self.script_end_cbs.append(f)
         return f
     
+    def remove_script_start_cb(self, f:Callable[[Script],Any]):
+        self.script_start_cbs.remove(f)
+
     def remove_script_end_cb(self, f:Callable[[Script],Any]):
         self.script_end_cbs.remove(f)
 
@@ -484,7 +500,7 @@ class ScriptFunctionParam:
             else:
                 tt = script.name_to_type(t)
                 if tt is None:
-                    raise exceptions.TMissingName(f"function signature: {repr(t)} not found")
+                    raise exceptions.TMissingName(f"function signature: type {repr(t)} not defined")
 
     def __eq__(self, other):
         if isinstance(other, ScriptFunctionParam):
