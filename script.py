@@ -52,6 +52,7 @@ class ScriptDataType[T]:
         self.name = name
         self.inner = inner
         self.parent = parent
+        self.__init = False
     
     def issubtype(self, *dts:"ScriptDataType")->bool:
         c = self
@@ -62,6 +63,25 @@ class ScriptDataType[T]:
                 return True
             c = c.parent
         return False
+    
+    def parent_chain(self):
+        dt = self.parent
+        while dt is not BASE_TYPE:
+            yield dt
+            dt = dt.parent
+        yield BASE_TYPE
+
+    def init_subtype(self, subtype:"ScriptDataType"):
+        pass
+
+    def init(self):
+        if self.__init:
+            return self
+        chain = list(self.parent_chain())
+        for parent in reversed(chain):
+            parent.init_subtype(self)
+        self.__init = True
+        return self
 
     def serialize(self, value:ScriptValue[T], type_str:bool=False)->Any:
         x = value.inner
@@ -257,7 +277,6 @@ class _variable_access:
         if isinstance(target, ScriptVariable):
             target = target.get()
         for name in subpath:
-            x = target.type
             target = target.type.getattr(target, name)
         return target
 
@@ -341,7 +360,7 @@ def _convert_script_value(value):
         return None
     return ScriptValue(t, value)
 
-def _map_name_to_type(name:str):
+def name_to_type(name:str):
     t = _name_to_datatype.get(name, None)
     if t is None:
         for dt in DATA_TYPE_TABLE.values():
@@ -367,15 +386,27 @@ def wrap_python_type(t:type|ScriptDataType):
     st = DATA_TYPE_TABLE.get(t, None)
     if st is not None:
         return st
+    
     st = tchain = ScriptDataType(t.__name__, t, None)
+    new_dts = {tchain}
     for sup in t.mro():
         supt = DATA_TYPE_TABLE.get(sup, None)
         if supt is None:
-            tchain.parent = ScriptDataType(sup.__name__, sup, None)
+            class _DynamicScriptDataType(ScriptDataType):
+                pass
+            tchain.parent = _DynamicScriptDataType(sup.__name__, sup, None)
+            tchain = tchain.parent
+            new_dts.add(tchain)
         else:
             tchain.parent = supt
             break
-    return st
+    
+    tchain_l = list(st.parent_chain())
+    for parent in reversed(tchain_l):
+        if parent in new_dts:
+            parent.init()
+
+    return st.init()
 
 class Script:
 

@@ -9,40 +9,66 @@ import string
 from typing import BinaryIO
 import uuid
 
+_TypeTypeAttrs = utils.ScriptAttributeHandler[type,Any](no_subscripting=True)
+@_TypeTypeAttrs.enforce_child_attrs()
+@_TypeTypeAttrs.attach
 class _TypeType(ScriptDataType[type]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
+
+    attrs = _TypeTypeAttrs
+    attrs.entry("name").readonly(lambda o, n: script.wrap_python_value(script.DATA_TYPE_TABLE[o.inner].name))
     
     def repr(self, value):
         return ScriptValue(String, f"<type {self.name} at {hex(id(value))}>")
-    
+
+_NullTypeAttrs = utils.ScriptAttributeHandler[None,Any](no_subscripting=True)
+@_NullTypeAttrs.enforce_child_attrs()
+@_NullTypeAttrs.attach
 class _NullType(ScriptDataType[None]):
     def serialize(self, value, type_str=False):
         return None
     
     def deserialize(self, x):
         return None
+    
+    attrs = _NullTypeAttrs
 
     def repr(self, value):
         return ScriptValue(String, "null")
 
+_FloatTypeAttrs = utils.ScriptAttributeHandler[float,Any](no_subscripting=True)
+@_FloatTypeAttrs.enforce_child_attrs()
+@_FloatTypeAttrs.attach
 class _FloatType(ScriptDataType[float]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
 
+    attrs = _FloatTypeAttrs
+    attrs.entry("integer_ratio").readonly(lambda o, n: script.wrap_python_value(_pair(*o.inner.as_integer_ratio())))
+    attrs.entry("is_integer").readonly(lambda o, n: script.wrap_python_value(o.inner.is_integer()))
+
     def repr(self, value):
         return ScriptValue(String, repr(value.inner))
 
+_IntegerTypeAttrs = utils.ScriptAttributeHandler[int,Any](no_subscripting=True)
+@_IntegerTypeAttrs.enforce_child_attrs()
+@_IntegerTypeAttrs.attach
 class _IntegerType(ScriptDataType[int]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
-        
+
+    attrs = _IntegerTypeAttrs
+
     def repr(self, value):
         return ScriptValue(String, repr(value.inner))
 
+_StringTypeAttrs = utils.ScriptAttributeHandler[str, int]()
+@_StringTypeAttrs.enforce_child_attrs(*utils.ATTR_ATTACH_ATTRS)
+@_StringTypeAttrs.attach_some(*utils.ATTR_ATTACH_ATTRS)
 class _StringType(ScriptDataType[str]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
@@ -54,18 +80,25 @@ class _StringType(ScriptDataType[str]):
     def repr(self, value):
         return ScriptValue(String, repr(value.inner))
 
-
+_BoolTypeAttrs = utils.ScriptAttributeHandler[bool,Any](_IntegerTypeAttrs)
+@_BoolTypeAttrs.enforce_child_attrs()
+@_BoolTypeAttrs.attach
 class _BoolType(ScriptDataType[bool]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
-    
+
+    attrs = _BoolTypeAttrs
+
     def conv_bool(self, value):
         return value
 
     def repr(self, value):
         return ScriptValue(String, "true" if value.inner else "false")
-    
+
+_NameValuePairTypeAttrs = utils.ScriptAttributeHandler(no_subscripting=True)
+@_NameValuePairTypeAttrs.enforce_child_attrs()
+@_NameValuePairTypeAttrs.attach
 class _NameValuePairType(ScriptDataType[ScriptNameValuePair]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
@@ -79,6 +112,10 @@ class _NameValuePairType(ScriptDataType[ScriptNameValuePair]):
         v.name = x["name"]
         v.value = utils.deserialize_value(x["value"]).inner
         return v
+
+    attrs = _NameValuePairTypeAttrs
+    attrs.entry("name").getter(utils.SimpleGetAttribute()).setter(utils.TypedSetter(str, utils.SimpleSetAttribute())).nodel()
+    attrs.entry("value").getter(utils.SimpleGetAttribute()).setter(utils.SimpleSetAttribute()).nodel()
 
     def repr(self, value):
         n = value.inner.name
@@ -116,6 +153,9 @@ class _pair[T,U]:
     def second(self, value:U):
         self._pair[1] = value
 
+_PairTypeAttrs = utils.ScriptAttributeHandler[_pair, int]()
+@_PairTypeAttrs.enforce_child_attrs()
+@_PairTypeAttrs.attach
 class _PairType(ScriptDataType[_pair]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
@@ -134,9 +174,28 @@ class _PairType(ScriptDataType[_pair]):
         return v
 
 
+    attrs = _PairTypeAttrs
+    attrs.entry("first").getter(utils.SimpleGetAttribute()).setter(utils.SimpleSetAttribute())
+    attrs.entry("second").getter(utils.SimpleGetAttribute()).setter(utils.SimpleSetAttribute())
+    attrs.entry(0).itemgetter(utils.SimpleGetItem()).itemsetter(utils.SimpleSetItem()).itemnodel()
+    attrs.entry(1).itemgetter(utils.SimpleGetItem()).itemsetter(utils.SimpleSetItem()).itemnodel()
+
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({(fv:=wrap_python_value(value.inner.first)).type.repr(fv).inner}, {(sv:=wrap_python_value(value.inner.second)).type.repr(sv).inner})")
     
+def pair_alias_subtype(name:str, inner_type:type, firstnames:list[str], secondnames:list[str]):
+    _attrs = utils.ScriptAttributeHandler[inner_type,Any](_PairTypeAttrs)
+    @_attrs.enforce_child_attrs()
+    @_attrs.attach
+    class _PairSubType(_PairType):
+        attrs = _attrs
+        attrs.alias(_PairTypeAttrs["first"], *firstnames)
+        attrs.alias(_PairTypeAttrs["second"], *secondnames)
+    return _PairSubType(name, inner_type, Pair)
+
+_ListTypeAttrs = utils.ScriptAttributeHandler[list,int](wildcard=utils.ScriptValueAttribute[list, int, Any](""))
+@_ListTypeAttrs.enforce_child_attrs(*utils.ATTR_ATTACH_ATTRS)
+@_ListTypeAttrs.attach_some(*utils.ATTR_ATTACH_ATTRS)
 class _ListType(ScriptDataType[list]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
@@ -150,10 +209,65 @@ class _ListType(ScriptDataType[list]):
         l = self.inner.__new__(self.inner)
         l.__init__()
         return l.extend(utils.deserialize_value(xi).inner for xi in x)
+    
+    attrs = _ListTypeAttrs
+
+    def getitem(self, obj, item):
+        v = item.get()
+        if v.type.issubtype(Integer):
+            return script.wrap_python_value(obj.inner[v.inner])
+        elif v.type.issubtype(Pair):
+            assert isinstance(v.inner, _pair)
+            try:
+                begin = int(v.inner.first)
+                end = int(v.inner.second)
+            except TypeError:
+                raise exceptions.TTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}, {Integer.name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
+            return script.wrap_python_value(obj.inner[begin:end])
+        else:
+            raise exceptions.TTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
+
+    def setitem(self, obj, item, value):
+        v = item.get()
+        x = value.get()
+        if v.type.issubtype(Integer):
+            obj.inner[v.inner] = x.inner
+        elif v.type.issubtype(Pair):
+            assert isinstance(v.inner, _pair)
+            try:
+                begin = int(v.inner.first)
+                end = int(v.inner.second)
+            except TypeError:
+                raise exceptions.TTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}, {Integer.name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
+            obj.inner[begin:end] = x.inner
+        else:
+            raise exceptions.TTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
+        return x
+
+    def delitem(self, obj, item):
+        v = item.get()
+        if v.type.issubtype(Integer):
+            x = script.wrap_python_value(obj.inner[v.inner])
+            del obj.inner[v.inner]
+        elif v.type.issubtype(Pair):
+            assert isinstance(v.inner, _pair)
+            try:
+                begin = int(v.inner.first)
+                end = int(v.inner.second)
+            except TypeError:
+                raise exceptions.TTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}, {Integer.name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
+            x = script.wrap_python_value(obj.inner[begin:end])
+            del obj.inner[begin:end]
+        else:
+            raise exceptions.TTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
+        return x
 
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({", ".join((v:=wrap_python_value(x)).type.repr(v).inner for x in value.inner)})")
     
+_MapTypeAttrs = utils.ScriptAttributeHandler[dict,Any](wildcard=utils.ScriptValueAttribute(""))
+@_MapTypeAttrs.enforce_child_attrs()
+@_MapTypeAttrs.attach
 class _MapType(ScriptDataType[dict]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
@@ -169,20 +283,24 @@ class _MapType(ScriptDataType[dict]):
             d[utils.deserialize_value(k).inner] = utils.deserialize_value(v).inner
         return d
 
+    attrs = _MapTypeAttrs
+
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({", ".join((k:=wrap_python_value(kx)).type.repr(k).inner + ": " + (v:=wrap_python_value(vx)).type.repr(v).inner for kx, vx in value.inner.items())})")
 
 class _rodict_dummy(dict):
     pass
 
+_MapReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rodict_dummy,Any](_MapTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
+@_MapReadonlyTypeAttrs.enforce_child_attrs()
+@_MapReadonlyTypeAttrs.attach
 class _MapReadonlyType(_MapType):
 
-    def setitem(self, obj, name, value):
-        raise TypeError(f"{self.name} object is read-only")
-        
-    def delitem(self, obj, name):
-        raise TypeError(f"{self.name} object is read-only")
+    attrs = _MapReadonlyTypeAttrs
 
+_UUIDTypeAttrs = utils.ScriptAttributeHandler[uuid.UUID,Any](no_subscripting=True)
+@_UUIDTypeAttrs.enforce_child_attrs()
+@_UUIDTypeAttrs.attach
 class _UUIDType(ScriptDataType[uuid.UUID]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
@@ -193,15 +311,6 @@ class _UUIDType(ScriptDataType[uuid.UUID]):
     
     def deserialize(self, x):
         return uuid.UUID(x)
-
-    def getattr(self, obj, name):
-        raise AttributeError(repr(name))
-    
-    def setattr(self, obj, name, value):
-        raise TypeError(f"{self.name} object is read-only")
-        
-    def delattr(self, obj, name):
-        raise TypeError(f"{self.name} object is read-only")
     
 class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
     
@@ -250,8 +359,11 @@ class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
         v = wrap_python_value(data)
         return v.type.repr(v)
 
-    
+_JsonProxyNodeTypeAttrs = utils.ScriptAttributeHandler(wildcard=utils.ScriptValueAttribute[json_proxy.JsonProxyNode, str|int, Any](""))
+@_JsonProxyNodeTypeAttrs.enforce_child_attrs()
 class _JsonProxyNodeType(ScriptDataType[json_proxy.JsonProxyNode]):
+    attrs = _JsonProxyNodeTypeAttrs
+
     def getattr(self, obj, name):
         return wrap_python_value(obj.inner.getchild(name))
     
@@ -305,6 +417,11 @@ Map_readonly = _MapReadonlyType("_map_readonly", _rodict_dummy, Map)
 UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
 JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TYPE)
 JsonNode = _JsonProxyNodeType("JsonNode", json_proxy.JsonProxyNode, BASE_TYPE)
+
+_StringTypeAttrs.wildcard.itemgetter(String.getitem)
+_ListTypeAttrs.wildcard.itemgetter(List.getitem).itemsetter(List.setitem).itemdeleter(List.delitem)
+_MapTypeAttrs.wildcard.itemgetter(Map.getitem).itemsetter(Map.setitem).itemdeleter(Map.delitem)
+_JsonProxyNodeTypeAttrs.wildcard.reverse_attach(JsonNode)
 
 null = ScriptValue(NullType, None)
 true = ScriptValue(Bool, True)

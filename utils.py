@@ -4,8 +4,10 @@ from . import script
 import asyncio
 from typing import Iterable
 
-import inspect
-from typing import Any
+from typing import Any, Callable
+
+def script_repr(v:ScriptValue)->str:
+    return v.type.repr(v).inner
 
 def generate_exception_help(raw:str, e:TronixException)->str:
     s = []
@@ -17,11 +19,13 @@ def generate_exception_help(raw:str, e:TronixException)->str:
         ...
     return "".join(s)
 
-def add_type(dt:ScriptDataType, constructor:bool=True):
+def add_type(dt:ScriptDataType, constructor:bool=True, init:bool=True):
+    if init:
+        dt.init()
     script.DATA_TYPE_TABLE[dt.inner] = dt
     if constructor:
         script.SCRIPT_FUNCTION_TABLE[dt.name] = dt.construct
-    script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(script.DATA_TYPE_TABLE[type], dt.inner))
+    script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(dt, dt.inner))
 
 def remove_type(dt:ScriptDataType):
     if dt is None:
@@ -80,6 +84,390 @@ class ScriptRunner:
     def remove_script_end_cb(self, f:Callable[[Script],Any]):
         self.script_end_cbs.remove(f)
 
+AttributeGetter = Callable[[ScriptValue, str], ScriptValue]
+AttributeSetter = Callable[[ScriptValue, str, ScriptVariable], ScriptValue]
+AttributeDeleter = Callable[[ScriptValue, str], ScriptValue]
+AttributeItemGetter = Callable[[ScriptValue, ScriptVariable], ScriptValue]
+AttributeItemSetter = Callable[[ScriptValue, ScriptVariable, ScriptVariable], ScriptValue]
+AttributeItemDeleter = Callable[[ScriptValue, ScriptVariable], ScriptValue]
+
+class ScriptAttributeNoAccess[T, K, U]:
+    def __init__(self, message:str|Callable[[ScriptValue[T], str|ScriptVariable[K], ScriptVariable[U]|None], str], error:type[Exception]=AttributeError):
+        self.message = message
+        self.error = error
+
+    def __call__(self, object:ScriptValue[T], name:str|ScriptVariable[K], value:ScriptVariable[U]|None=None):
+        if isinstance(self.message, str):
+            m = self.message
+        else:
+            m = self.message(object, name, value)
+        raise self.error(m)
+
+def __error_repr_attr_key(n:str|ScriptVariable):
+    return script_repr(n.get()) if isinstance(n, script.ScriptVariable) else repr(n)
+
+_DEFAULT_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only get {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only assign to {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only delete {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not get {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not assign {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not delete {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+
+_DEFAULT_ITEM_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only get {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only assign to {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only delete {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not get {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not assign {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not delete {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+
+_DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable (you can't do value[...])", error=exceptions.TNotImplemented)
+_DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"can not assign value of type {v.type().name} to {__error_repr_attr_key(n)} {"item" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
+
+def SimpleGetAttribute(name:str|None=None)->AttributeGetter:
+    def f(o:ScriptValue, n:str):
+        return script.wrap_python_value(getattr(o.inner, name or n))
+    return f
+def MethodGetAttribute(name:str|None=None, args:tuple=(), kwargs:dict[str]={})->AttributeGetter:
+    def f(o:ScriptValue, n:str):
+        return script.wrap_python_value(getattr(o.inner, name or n)(*args, **kwargs))
+    return f
+def SimpleSetAttribute(name:str|None=None)->AttributeSetter:
+    def f(o:ScriptValue, n:str, v:ScriptVariable):
+        x = v.get()
+        setattr(o.inner, name or n, x.inner)
+        return x
+    return f
+def SimpleDelAttribute(name:str=None, pop:bool=True)->AttributeDeleter:
+    if pop:
+        def f(o:ScriptValue, n):
+            nn = name or n
+            x = o.type.getattr(o, nn)
+            delattr(o.inner, nn)
+            return x
+    else:
+        def f(o:ScriptValue, n):
+            delattr(o.inner, name or n)
+    return f
+
+__ITEM_SIMPLE_NO_OVERRIDE = object()
+
+def SimpleGetItem(key:Any=__ITEM_SIMPLE_NO_OVERRIDE)->AttributeItemGetter:
+    def f(o:ScriptValue, n:ScriptVariable):
+        return script.wrap_python_value(o.inner[n.get().inner if key is __ITEM_SIMPLE_NO_OVERRIDE else key])
+    return f
+def SimpleSetItem(key:Any=__ITEM_SIMPLE_NO_OVERRIDE)->AttributeItemSetter:
+    def f(o:ScriptValue, n:ScriptVariable, v:ScriptVariable):
+        x = v.get()
+        o.inner[n.get().inner if key is __ITEM_SIMPLE_NO_OVERRIDE else key] = x.inner
+        return x
+    return f
+def SimpleDelItem(key:Any=__ITEM_SIMPLE_NO_OVERRIDE, pop:bool=True)->AttributeItemDeleter:
+    if pop:
+        kvar = None if key is __ITEM_SIMPLE_NO_OVERRIDE else script.ScriptVariable(script.wrap_python_value(key))
+        def f(o:ScriptValue, n:ScriptVariable):
+            v = kvar or n
+            x = o.type.getitem(o, v)
+            del o.inner[v.get().inner]
+            return x
+    else:
+        def f(o:ScriptValue, n:ScriptVariable):
+            del o.inner[n.get().inner if key is __ITEM_SIMPLE_NO_OVERRIDE else key]
+    return f
+def SimpleGetAttributeAsItem(name:str|None=None)->AttributeItemGetter:
+    def f(o:ScriptValue, n:ScriptVariable):
+        return script.wrap_python_value(getattr(o.inner, name or n.get().inner))
+    return f
+def SimpleSetAttributeAsItem(name:str|None=None)->AttributeItemSetter:
+    def f(o:ScriptValue, n:ScriptVariable, v:ScriptVariable):
+        x = v.get()
+        setattr(o.inner, name or n.get().inner, x.inner)
+        return x
+    return f
+def SimpleDelAttributeAsItem(name:str|None=None, pop:bool=True)->AttributeItemDeleter:
+    if pop:
+        def f(o:ScriptValue, n:ScriptVariable):
+            nn = name or n.get().inner
+            x = o.type.getattr(o, nn)
+            delattr(o.inner, nn)
+            return x
+    else:
+        def f(o:ScriptValue, n:ScriptVariable):
+            delattr(o.inner, name or n.get().inner)
+    return f
+
+def TypedSetter(ts:type|ScriptDataType|list[type|ScriptDataType], f:AttributeSetter|AttributeItemSetter|None=None, no_access:ScriptAttributeNoAccess|None=None):
+    if no_access is None:
+        no_access = _DEFAULT_WRITE_WRONG_TYPE
+
+    def decor(ff:AttributeSetter|AttributeItemSetter):
+        def typecheck_wrapper(o:ScriptValue, n:str|ScriptVariable, v:ScriptVariable):
+            if isinstance(ts, (type, script.ScriptDataType)):
+                tlist = [script.wrap_python_type(ts)]
+            else:
+                tlist = [script.wrap_python_type(t) for t in ts]
+            x = v.get()
+            if x.type.issubtype(*tlist):
+                return ff(o, n, v)
+            else:
+                return no_access(o, n, v)
+        return typecheck_wrapper
+
+    if f is None:
+        return decor
+    else:
+        return decor(f)
+
+
+class ScriptValueAttribute[T, K, U]:
+    def __init__(self, key:K,
+                 get:Callable[[ScriptValue[T], str], ScriptValue[U]]|None=None,
+                 set:Callable[[ScriptValue[T], str, ScriptVariable[U]], ScriptValue]|None=None,
+                 delete:Callable[[ScriptValue[T], str], ScriptValue[U]]|None=None,
+                 getitem:Callable[[ScriptValue[T], ScriptVariable[K]], ScriptValue]|None=None,
+                 setitem:Callable[[ScriptValue[T], ScriptVariable[K], ScriptVariable[U]], ScriptValue]|None=None,
+                 delitem:Callable[[ScriptValue[T], ScriptVariable[K]], ScriptValue]|None=None):
+        self.key = key
+        self._get = get
+        self._set = set
+        self._del = delete
+        self._getitem = getitem
+        self._setitem = setitem
+        self._delitem = delitem
+
+    def readonly(self, f:Callable[[ScriptValue[T], str], ScriptValue[U]], no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        if no_access is None:
+            no_access = _DEFAULT_READONLY_NO_ACCESS
+        return self.getter(f).setter(no_access).deleter(no_access)
+    
+    def writeonly(self, f:Callable[[ScriptValue[T], str, ScriptVariable[U]], ScriptValue], no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        if no_access is None:
+            no_access = _DEFAULT_WRITEONLY_NO_ACCESS
+        return self.getter(no_access).setter(f).deleter(no_access)
+    
+    def deleteonly(self, f:Callable[[ScriptValue[T], str], ScriptValue[U]], no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        if no_access is None:
+            no_access = _DEFAULT_DELETEONLY_NO_ACCESS
+        return self.getter(no_access).setter(no_access).deleter(f)
+    
+    def noget(self, no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        return self.getter(_DEFAULT_READ_NO_ACCESS if no_access is None else no_access)
+    
+    def noset(self, no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        return self.getter(_DEFAULT_WRITE_NO_ACCESS if no_access is None else no_access)
+    
+    def nodel(self, no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        return self.getter(_DEFAULT_DELETE_NO_ACCESS if no_access is None else no_access)
+
+    def getter(self, f:Callable[[ScriptValue[T], str], ScriptValue[U]]):
+        self._get = f
+        return self
+    
+    def setter(self, f:Callable[[ScriptValue[T], str, ScriptVariable[U]], ScriptValue]):
+        self._set = f
+        return self
+    
+    def deleter(self, f:Callable[[ScriptValue[T], str], ScriptValue[U]]):
+        self._del = f
+        return self
+    
+    def itemreadonly(self, f:Callable[[ScriptValue[T], ScriptVariable[K]], ScriptValue], no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        if no_access is None:
+            no_access = _DEFAULT_ITEM_READONLY_NO_ACCESS
+        return self.itemgetter(f).itemsetter(no_access).itemdeleter(no_access)
+    
+    def itemwriteonly(self, f:Callable[[ScriptValue[T], ScriptVariable[K], ScriptVariable[U]], ScriptValue], no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        if no_access is None:
+            no_access = _DEFAULT_ITEM_WRITEONLY_NO_ACCESS
+        return self.itemgetter(no_access).itemsetter(f).itemdeleter(no_access)
+    
+    def itemdeleteonly(self, f:Callable[[ScriptValue[T], ScriptVariable[K]], ScriptValue], no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        if no_access is None:
+            no_access = _DEFAULT_ITEM_DELETEONLY_NO_ACCESS
+        return self.itemgetter(no_access).itemsetter(no_access).itemdeleter(f)
+    
+    def itemnoget(self, no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        return self.itemgetter(_DEFAULT_ITEM_READ_NO_ACCESS if no_access is None else no_access)
+    
+    def itemnoset(self, no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        return self.itemsetter(_DEFAULT_ITEM_WRITE_NO_ACCESS if no_access is None else no_access)
+    
+    def itemnodel(self, no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
+        return self.itemdeleter(_DEFAULT_ITEM_DELETE_NO_ACCESS if no_access is None else no_access)
+
+    def itemgetter(self, f:Callable[[ScriptValue[T], ScriptVariable[K]], ScriptValue]):
+        self._getitem = f
+        return self
+    
+    def itemsetter(self, f:Callable[[ScriptValue[T], ScriptVariable[K], ScriptVariable[U]], ScriptValue]):
+        self._setitem = f
+        return self
+    
+    def itemdeleter(self, f:Callable[[ScriptValue[T], ScriptVariable[K]], ScriptValue]):
+        self._delitem = f
+        return self
+    
+    def reverse_attach(self, dt:script.ScriptDataType|type[script.ScriptDataType]):
+        self._get:Callable[[ScriptValue[T], str], ScriptValue[U]]|None                                      = getattr(dt, "getattr", None)
+        self._set:Callable[[ScriptValue[T], str, ScriptVariable[U]], ScriptValue]|None                      = getattr(dt, "setattr", None)
+        self._del:Callable[[ScriptValue[T], str], ScriptValue[U]]|None                                      = getattr(dt, "delattr", None)
+        self._getitem:Callable[[ScriptValue[T], ScriptVariable[K]], ScriptValue]|None                       = getattr(dt, "getitem", None)
+        self._setitem:Callable[[ScriptValue[T], ScriptVariable[K], ScriptVariable[U]], ScriptValue]|None    = getattr(dt, "setitem", None)
+        self._delitem:Callable[[ScriptValue[T], ScriptVariable[K]], ScriptValue]|None                       = getattr(dt, "delitem", None)
+        return self
+
+
+
+ATTR_ATTACH_ALL = "getattr", "setattr", "delattr", "getitem", "setitem", "delitem"
+ATTR_ATTACH_ATTRS = "getattr", "setattr", "delattr"
+ATTR_ATTACH_ITEMS = "getitem", "setitem", "delitem"
+
+class ScriptAttributeHandler[T,K]:
+    def __init__(self, parent:"ScriptAttributeHandler|None"=None, wildcard:ScriptValueAttribute[T,K,Any]|None=None, no_subscripting:bool=False):
+        self.parent = parent
+        self.no_subscripting = no_subscripting
+        if no_subscripting:
+            if not wildcard:
+                wildcard = ScriptValueAttribute("")
+            wildcard = wildcard.itemgetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemsetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemdeleter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE)
+        self.wildcard = wildcard
+        self.attributes:dict[str|K, ScriptValueAttribute[T,K,Any]] = {}
+    
+    def __getitem__(self, key:K):
+        return self.attributes[key]
+
+    def entry[U](self, key:str|K, *aliases:str, vt:type[U]=Any):
+        if key in self.attributes:
+            raise KeyError(f"{repr(key)} already in attribute handler")
+        attr = self.attributes[key] = ScriptValueAttribute[T,K,U](key)
+        if self.no_subscripting:
+            attr = attr.itemgetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemsetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemdeleter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE)
+        return self.alias(attr, *aliases)
+
+    def alias[U](self, attr:ScriptValueAttribute[T,K,U], *aliases:K):
+        for alias in aliases:
+            self.attributes[alias] = attr
+        return attr
+
+    def func_get(self):
+        def getattr(_, object:ScriptValue[T], name:str):
+            p = self
+            while p is not None:
+                attr = self.attributes.get(name, self.wildcard)
+                if not (attr is None or attr._get is None):
+                    return attr._get(object, name)
+                p = self.parent
+            raise AttributeError(repr(name))
+        return getattr
+    
+    def func_getitem(self):
+        def getitem(_, object:ScriptValue[T], key:ScriptVariable[K]):
+            p = self
+            keyx = key.get().inner
+            while p is not None:
+                attr = self.attributes.get(keyx, None)
+                if not (attr is None or attr._getitem is None):
+                    return attr._getitem(object, key)
+                p = self.parent
+            raise LookupError(key.type().repr(key.get()).inner)
+        return getitem
+
+    def func_set(self):
+        def setattr(_, object:ScriptValue[T], name:str, value:ScriptVariable):
+            p = self
+            while p is not None:
+                attr = self.attributes.get(name, self.wildcard)
+                if attr is not None:
+                    if attr._set is not None:
+                        return attr._set(object, name, value)
+                p = self.parent
+            raise AttributeError(repr(name))
+        return setattr
+    
+    def func_setitem(self):
+        def setitem(_, object:ScriptValue[T], key:ScriptVariable[K], value:ScriptVariable):
+            p = self
+            keyx = key.get().inner
+            while p is not None:
+                attr = self.attributes.get(keyx, None)
+                if not (attr is None or attr._setitem is None):
+                    return attr._setitem(object, key, value)
+                p = self.parent
+            raise LookupError(key.type().repr(key.get()).inner)
+        return setitem
+    
+    def func_del(self):
+        def delattr(_, object:ScriptValue[T], name:str):
+            p = self
+            while p is not None:
+                attr = self.attributes.get(name, self.wildcard)
+                if attr is not None:
+                    if attr._del is not None:
+                        return attr._del(object, name)
+                p = self.parent
+            raise AttributeError(repr(name))
+        return delattr
+    
+    def func_delitem(self):
+        def getitem(_, object:ScriptValue[T], key:ScriptVariable[K]):
+            p = self
+            keyx = key.get().inner
+            while p is not None:
+                attr = self.attributes.get(keyx, None)
+                if not (attr is None or attr._delitem is None):
+                    return attr._delitem(object, key)
+                p = self.parent
+            raise LookupError(key.type().repr(key.get()).inner)
+        return getitem
+    
+    def make_funcs(self):
+        return self.func_get(), self.func_set(), self.func_del(), self.func_getitem(), self.func_setitem(), self.func_delitem()
+    
+    def attach(self, dt):
+        dt.getattr, dt.setattr, dt.delattr, dt.getitem, dt.setitem, dt.delitem = self.make_funcs()
+        return dt
+    
+    def attach_some(self, *names:str):
+        funcs = dict(zip(ATTR_ATTACH_ALL, self.make_funcs()))
+        def decor(dt):
+            for name in names:
+                func = funcs.get(name,None)
+                if func is not None:
+                    setattr(dt, name, func)
+            return dt
+        return decor
+    
+    def _enforce(self, sdt:ScriptDataType, attach_names:tuple[str]):
+        t = type(sdt)
+        attrs = getattr(t, "attrs", None)
+        if not isinstance(attrs, ScriptAttributeHandler) or attrs is self:
+            attrs = ScriptAttributeHandler(self)
+            setattr(t, "attrs", attrs)
+            if attach_names:
+                attrs.attach_some(*attach_names)(t)
+
+    def enforce_child_attrs(self, *names:str, skip_child_attach:bool=False):
+        def decor(dt):
+            nonlocal names
+            if skip_child_attach:
+                names = ()
+            elif not names:
+                names = ATTR_ATTACH_ALL
+            
+            base_init_subtype = getattr(dt, "init_subtype", None)
+
+            if callable(base_init_subtype):
+                def enforcement_init_wrapper(s, subtype:ScriptDataType):
+                    self._enforce(subtype, names)
+                    return base_init_subtype(s, subtype)
+                setattr(dt, "init_subtype", enforcement_init_wrapper)
+            else:
+                def enforcement_init(_, subtype:ScriptDataType):
+                    self._enforce(subtype, names)
+                setattr(dt, "init_subtype", enforcement_init)
+
+            return dt
+        return decor
+
 _PARAM_NO_DEFAULT = object()
 
 class ScriptFunctionParam:
@@ -94,7 +482,7 @@ class ScriptFunctionParam:
             if isinstance(t, ScriptDataType):
                 yield t
             else:
-                tt = script._map_name_to_type(t)
+                tt = script.name_to_type(t)
                 if tt is None:
                     raise exceptions.TMissingName(f"function signature: {repr(t)} not found")
 
@@ -300,7 +688,7 @@ class _serialized_value:
 
     def _deserialize(self):
         if isinstance(self.t, str):
-            return script._map_name_to_type(self.t).deserialize(self.v)
+            return script.name_to_type(self.t).deserialize(self.v)
         else:
             return script.wrap_python_type(self.t).deserialize(self.v)
 
