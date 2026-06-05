@@ -3,7 +3,7 @@ import os
 from typing import Any, Callable, Self
 
 class JsonProxyNode:
-    def __init__(self, path:list[str|int], root:"JsonProxyRoot", parent:Self, inner:dict[str]|list=None):
+    def __init__(self, path:list[str|int], root:"JsonProxyRoot", parent:"JsonProxyNode", inner:dict[str]|list=None):
         self.path = path
         self.root = root
         self.parent = parent
@@ -20,14 +20,14 @@ class JsonProxyNode:
         else:
             return self.inner
 
-    def getchild(self, key:str|int)->str|int|float|bool|None|Self:
+    def getchild(self, key:str|int)->"str|int|float|bool|None|JsonProxyNode":
         c = self.resolve()
         value = c[key]
         if isinstance(value, (dict,list)):
             return JsonProxyNode([*self.path, key], self.root, self, value)
         return value
 
-    def setchild(self, key:str|int, value:str|int|float|bool|None|dict|list|Self):
+    def setchild(self, key:str|int, value:"str|int|float|bool|None|dict|list|JsonProxyNode"):
         if isinstance(value, JsonProxyNode):
             value = value.resolve()
         c = self.resolve()
@@ -40,13 +40,49 @@ class JsonProxyNode:
         self.root.mark_updated([*self.path, key], path_is_kept=False)
         return value
 
+class _schema_match_node:
+    def __init__(self, segment:str|int|None, t:type|None=None):
+        self.segment = segment
+        self.children:dict[str|int|None, Self] = {}
+        self.t = t
+
+class JsonProxySchema:
+    def __init__(self):
+        self._root:dict[str|int|None, _schema_match_node] = {}
+
+    def add_path(self, path:list[str|int|None], t:type):
+        d = self._root
+        for segment in path:
+            node = d.get(segment, None)
+            if node is None:
+                node = d[segment] = _schema_match_node(segment)
+            d = node.children
+        if node.t is None:
+            node.t = t
+        return node.t
+    
+    def match_path(self, path:list[str|int]):
+        node = None
+        d = self._root
+        for segment in path:
+            node = d.get(segment, None)
+            if node is None:
+                node = d.get(None, None)
+                if node is None:
+                    return None
+            d = node.children
+        if node is None:
+            return None
+        return node.t
+
 class JsonProxyRoot:
-    def __init__(self, path:str, buffer:bool=True, mtimefunc:Callable[[],int]|None=None, loadfunc:Callable[[],Any]|None=None, savefunc:Callable[[Any],bool]|None=None):
+    def __init__(self, path:str, buffer:bool=True, mtimefunc:Callable[[],int]|None=None, loadfunc:Callable[[],Any]|None=None, savefunc:Callable[[Any],bool]|None=None, schema:JsonProxySchema|None=None):
         self.path = path
         self.buffer = buffer
         self.mtimefunc = mtimefunc
         self.loadfunc = loadfunc
         self.savefunc = savefunc
+        self.schema = JsonProxySchema() if schema is None else schema
         self._cached = None
         self._last_updated = None
         self._pending_updates:list[tuple[bool, list[str|int]]] = []
@@ -56,6 +92,26 @@ class JsonProxyRoot:
             return os.stat(self.path).st_mtime_ns
         else:
             return self.mtimefunc()
+        
+    def getchild(self, key:str|int)->"str|int|float|bool|None|JsonProxyNode":
+        c, _ = self.get_data()
+        value = c[key]
+        if isinstance(value, (dict,list)):
+            return JsonProxyNode([key], self, None, value)
+        return value
+
+    def setchild(self, key:str|int, value:"str|int|float|bool|None|dict|list|JsonProxyNode"):
+        if isinstance(value, JsonProxyNode):
+            value = value.resolve()
+        c, _ = self.get_data()
+        c[key] = value
+        self.mark_updated([key], path_is_kept=True)
+    
+    def delchild(self, key:str|int)->str|int|float|bool|None|dict|list:
+        c, _ = self.get_data()
+        value = c.pop(key)
+        self.mark_updated([key], path_is_kept=False)
+        return value
 
     def get_data(self):
         lu = self._last_updated

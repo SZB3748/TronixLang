@@ -315,44 +315,80 @@ class _UUIDType(ScriptDataType[uuid.UUID]):
 class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
     
     def getattr(self, obj, name):
-        root = json_proxy.JsonProxyNode([], obj.inner, None)
-        return wrap_python_value(root.getchild(name))
+        result = obj.inner.getchild(name)
+        sm = obj.inner.schema.match_path([name])
+        if sm is None:
+            return wrap_python_value(result)
+        else:
+            instance = sm.__new__(sm)
+            instance.__setstate__(result)
+            return wrap_python_value(instance)
     
     def setattr(self, obj, name, value):
         v = value.get()
-        root = json_proxy.JsonProxyNode([], obj.inner, None)
-        root.setchild(name, v.inner)
+        sm = obj.inner.schema.match_path([name])
+        if sm is None:
+            obj.inner.setchild(name, v.inner)
+        elif isinstance(v.inner, sm):
+            obj.inner.setchild(name, v.inner.__getstate__())
+        else:
+            smt = script.wrap_python_type(sm)
+            raise exceptions.TTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
         return v
         
     def delattr(self, obj, name):
-        root = json_proxy.JsonProxyNode([], obj.inner, None)
-        return wrap_python_value(root.delchild(name))
+        result = obj.inner.delchild(name)
+        sm = obj.inner.schema.match_path([name])
+        if sm is None:
+            return wrap_python_value(result)
+        else:
+            instance = sm.__new__(sm)
+            instance.__setstate__(result)
+            return wrap_python_value(instance)
     
     def getitem(self, obj, item):
         key = item.get()
         if key.type.issubtype(String, Integer):
-            root = json_proxy.JsonProxyNode([], obj.inner, None)
-            return wrap_python_value(root.getchild(key.inner))
+            result = obj.inner.getchild(key.inner)
+            sm = obj.inner.schema.match_path([key.inner])
+            if sm is None:
+                return wrap_python_value(result)
+            else:
+                instance = sm.__new__(sm)
+                instance.__setstate__(result)
+                return wrap_python_value(instance)
         else:
-            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
     
     def setitem(self, obj, item, value):
         v = value.get()
         key = item.get()
         if key.type.issubtype(String, Integer):
-            root = json_proxy.JsonProxyNode([], obj.inner, None)
-            root.setchild(key.inner, v.inner)
+            sm = obj.inner.schema.match_path([key.inner])
+            if sm is None:
+                obj.inner.setchild(key.inner, v.inner)
+            elif isinstance(v.inner, sm):
+                obj.inner.setchild(key.inner, v.inner.__getstate__())
+            else:
+                smt = script.wrap_python_type(sm)
+                raise exceptions.TTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
             return v
         else:
-            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
     
     def delitem(self, obj, item):
         key = item.get()
         if key.type.issubtype(String, Integer):
-            root = json_proxy.JsonProxyNode([], obj.inner, None)
-            return wrap_python_value(root.delchild(key.inner))
+            result = obj.inner.delchild(key.inner)
+            sm = obj.inner.schema.match_path([key.inner])
+            if sm is None:
+                return wrap_python_value(result)
+            else:
+                instance = sm.__new__(sm)
+                instance.__setstate__(result)
+                return wrap_python_value(instance)
         else:
-            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
         
     def repr(self, value):
         data, _ = value.inner.get_data()
@@ -365,38 +401,80 @@ class _JsonProxyNodeType(ScriptDataType[json_proxy.JsonProxyNode]):
     attrs = _JsonProxyNodeTypeAttrs
 
     def getattr(self, obj, name):
-        return wrap_python_value(obj.inner.getchild(name))
+        result = obj.inner.getchild(name)
+        sm = obj.inner.root.schema.match_path([name])
+        if sm is None:
+            return wrap_python_value(result)
+        else:
+            instance = sm.__new__(sm)
+            instance.__setstate__(result)
+            return wrap_python_value(instance)
     
     def setattr(self, obj, name, value):
         v = value.get()
-        obj.inner.setchild(name, v.inner)
+        sm = obj.inner.root.schema.match_path([name])
+        if sm is None:
+            obj.inner.setchild(name, v.inner)
+        elif isinstance(v.inner, sm):
+            obj.inner.setchild(name, v.inner.__getstate__())
+        else:
+            smt = script.wrap_python_type(sm)
+            raise exceptions.TTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
         return v
         
     def delattr(self, obj, name):
-        return wrap_python_value(obj.inner.delchild(name))
+        result = obj.inner.delchild(name)
+        sm = obj.inner.root.schema.match_path([name])
+        if sm is None:
+            return wrap_python_value(result)
+        else:
+            instance = sm.__new__(sm)
+            instance.__setstate__(result)
+            return wrap_python_value(instance)
     
     def getitem(self, obj, item):
         key = item.get()
         if key.type.issubtype(String, Integer):
-            return wrap_python_value(obj.inner.getchild(key.inner))
+            result = obj.inner.getchild(key.inner)
+            sm = obj.inner.root.schema.match_path([key.inner])
+            if sm is None:
+                return wrap_python_value(result)
+            else:
+                instance = sm.__new__(sm)
+                instance.__setstate__(result)
+                return wrap_python_value(instance)
         else:
-            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
     
     def setitem(self, obj, item, value):
         v = value.get()
         key = item.get()
         if key.type.issubtype(String, Integer):
-            obj.inner.setchild(key.inner, v.inner)
+            sm = obj.inner.root.schema.match_path([key.inner])
+            if sm is None:
+                obj.inner.setchild(key.inner, v.inner)
+            elif isinstance(v.inner, sm):
+                obj.inner.setchild(key.inner, v.inner.__getstate__())
+            else:
+                smt = script.wrap_python_type(sm)
+                raise exceptions.TTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
             return v
         else:
-            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
     
     def delitem(self, obj, item):
         key = item.get()
         if key.type.issubtype(String, Integer):
-            return wrap_python_value(obj.inner.delchild(key.inner))
+            result = obj.inner.delchild(key.inner)
+            sm = obj.inner.root.schema.match_path([key.inner])
+            if sm is None:
+                return wrap_python_value(result)
+            else:
+                instance = sm.__new__(sm)
+                instance.__setstate__(result)
+                return wrap_python_value(instance)
         else:
-            raise exceptions.TTypeError(f"{self.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
         
     def repr(self, value):
         v = wrap_python_value(value.inner.resolve())
