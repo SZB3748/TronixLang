@@ -6,7 +6,7 @@ import asyncio
 import json
 import mimetypes
 import string
-from typing import BinaryIO
+from typing import BinaryIO, IO
 import uuid
 
 _TypeTypeAttrs = utils.ScriptAttributeHandler[type,Any](no_subscripting=True)
@@ -74,6 +74,25 @@ class _StringType(ScriptDataType[str]):
     f_construct:ScriptFunction[Self] = ScriptFunction()
     construct = f_construct
     
+    attrs = _StringTypeAttrs
+    attrs.wildcard = utils.ScriptValueAttribute("").itemreadonly(utils.SimpleGetItem())
+    attrs.entry("capitalized").readonly(utils.MethodGetAttribute("capitalize"))
+    attrs.entry("casefolded").readonly(utils.MethodGetAttribute("casefold"))
+    attrs.entry("is_alpha_numeric").readonly(utils.MethodGetAttribute("isalnum"))
+    attrs.entry("is_alphabetic").readonly(utils.MethodGetAttribute("isalpha"))
+    attrs.entry("is_ascii").readonly(utils.MethodGetAttribute("isascii"))
+    attrs.entry("is_decimal").readonly(utils.MethodGetAttribute("isdecimal"))
+    attrs.entry("is_digit").readonly(utils.MethodGetAttribute("isdigit"))
+    attrs.entry("is_lowercase").readonly(utils.MethodGetAttribute("islower"))
+    attrs.entry("is_numeric").readonly(utils.MethodGetAttribute("isnumeric"))
+    attrs.entry("is_space", "is_whitespace").readonly(utils.MethodGetAttribute("isspace"))
+    attrs.entry("is_titlecase").readonly(utils.MethodGetAttribute("istitle"))
+    attrs.entry("is_uppercase").readonly(utils.MethodGetAttribute("isupper"))
+    attrs.entry("lowercased").readonly(utils.MethodGetAttribute("lower"))
+    attrs.entry("caseswapped").readonly(utils.MethodGetAttribute("spawcase"))
+    attrs.entry("titlecased").readonly(utils.MethodGetAttribute("title"))
+    attrs.entry("uppercased").readonly(utils.MethodGetAttribute("upper"))
+
     def conv_str(self, value):
         return value
 
@@ -183,7 +202,12 @@ class _PairType(ScriptDataType[_pair]):
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({(fv:=wrap_python_value(value.inner.first)).type.repr(fv).inner}, {(sv:=wrap_python_value(value.inner.second)).type.repr(sv).inner})")
     
-def pair_alias_subtype(name:str, inner_type:type, firstnames:list[str], secondnames:list[str]):
+def pair_alias_subtype(name:str, firstnames:list[str], secondnames:list[str], inner_type:type|None=None):
+    if inner_type is None:
+        class _pair_alias_dummy(_pair):
+            pass
+        _pair_alias_dummy.__name__ = name + _pair_alias_dummy.__name__
+        inner_type = _pair_alias_dummy
     _attrs = utils.ScriptAttributeHandler[inner_type,Any](_PairTypeAttrs)
     @_attrs.enforce_child_attrs()
     @_attrs.attach
@@ -480,6 +504,21 @@ class _JsonProxyNodeType(ScriptDataType[json_proxy.JsonProxyNode]):
         v = wrap_python_value(value.inner.resolve())
         return v.type.repr(v)
 
+class _file_wrapper:
+    def __init__(self, file:IO[bytes]):
+        self.file = file
+
+_FileTypeAttrs = utils.ScriptAttributeHandler(no_subscripting=True)
+class _FileType(script.ScriptDataType[_file_wrapper]):
+
+    construct = f_construct = utils.ScriptFunction()
+
+    attrs = _FileTypeAttrs
+    attrs.entry("name").readonly(utils.SimpleGetAttribute())
+    attrs.entry("mode").readonly(utils.SimpleGetAttribute())
+    attrs.entry("fileno").readonly(utils.MethodGetAttribute())
+
+
 AnyType = BASE_TYPE
 Type = _TypeType("type", type, BASE_TYPE)
 Float = _FloatType("float", float, BASE_TYPE)
@@ -495,6 +534,7 @@ Map_readonly = _MapReadonlyType("_map_readonly", _rodict_dummy, Map)
 UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
 JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TYPE)
 JsonNode = _JsonProxyNodeType("JsonNode", json_proxy.JsonProxyNode, BASE_TYPE)
+File = _FileType("File", _file_wrapper, BASE_TYPE)
 
 _StringTypeAttrs.wildcard.itemgetter(String.getitem)
 _ListTypeAttrs.wildcard.itemgetter(List.getitem).itemsetter(List.setitem).itemdeleter(List.delitem)
@@ -595,6 +635,13 @@ def map_construct(self, *items:ScriptVariable[_pair|ScriptNameValuePair]):
 def uuid_construct(self, hex:ScriptVariable[str]):
     return ScriptValue(self, uuid.UUID(hex))
 
+@_FileType.f_construct.overload(("path", String), ("mode", String, "read"))
+def File_construct(self, path:ScriptVariable[str], mode:ScriptVariable[str]):
+    m = mode.get().inner.lower()
+    if m not in ("read", "write", "append"):
+        raise exceptions.TBadValue(f"file mode must be read, write, or append; got {mode.get().inner}")
+    return ScriptValue(self, _file_wrapper(open(path.get().inner, m[0]+"b")))
+
 f_isinstance = ScriptFunction()
 f_issubtype = ScriptFunction()
 f_has = ScriptFunction()
@@ -607,6 +654,7 @@ f_format_json = ScriptFunction()
 f_parse_json = ScriptFunction()
 f_read = ScriptFunction()
 f_write = ScriptFunction()
+f_close = ScriptFunction()
 
 @f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
@@ -718,25 +766,49 @@ def _write_file_json(file:BinaryIO, mimetype:str, var:ScriptVariable, options:di
 ReadBehavior = Callable[[BinaryIO, str], script.ScriptValue]
 WriteBehavior = Callable[[BinaryIO, str, ScriptVariable], None|ScriptValue]
 
-_default_read_behaviors:dict[str, ReadBehavior] = {}
-_default_write_behaviors:dict[str, tuple[WriteBehavior, list[ScriptDataType]]] = {}
+_read_behaviors:dict[str, ReadBehavior] = {}
+_write_behaviors:dict[str, tuple[WriteBehavior, list[ScriptDataType]]] = {}
 
 def add_read_behavior(mimetype:str, behavior:ReadBehavior):
-    _default_read_behaviors[mimetype] = behavior
+    _read_behaviors[mimetype] = behavior
 
 def add_write_behavior(mimetype:str, behavior:WriteBehavior, types:list[ScriptDataType]|None=None):
-    _default_write_behaviors[mimetype] = behavior, ([AnyType] if types is None else types)
+    _write_behaviors[mimetype] = behavior, ([AnyType] if types is None else types)
+
+def remove_read_behavior(mimetype:str, behavior:ReadBehavior|None=None):
+    if behavior is None:
+        return _read_behaviors.pop(mimetype, None)
+    elif _read_behaviors.get(mimetype, None) is behavior:
+        del _read_behaviors[mimetype]
+        return behavior
+
+def remove_write_behavior(mimetype:str, behavior:WriteBehavior|None=None):
+    if behavior is None:
+        return _write_behaviors.pop(mimetype, None)
+    elif _write_behaviors.get(mimetype, (None,))[0] is behavior:
+        del _write_behaviors[mimetype]
+        return behavior
+
+def all_mimetypes_of(prefix:str)->set[str]:
+    mimes = set()
+    for mime in mimetypes.types_map.values():
+        if mime.startswith(prefix):
+            mimes.add(mime)
+    for mime in mimetypes.common_types.values():
+        if mime.startswith(prefix):
+            mimes.add(mime)
+    return mimes
 
 def _read_file(file:BinaryIO, ext:str, mimetype:str=None):
     if mimetype is None:
-        mimetype = mimetypes.guess_type(f"x.{ext}", strict=False)
-    behavior = _default_read_behaviors.get(mimetype, _read_file_plaintext)
+        mimetype = mimetypes.guess_type(f"x.{ext}", strict=False)[0]
+    behavior = _read_behaviors.get(mimetype, _read_file_plaintext)
     return behavior(file, mimetype)
 
 def _write_file(file:BinaryIO, ext:str, value:ScriptVariable, mimetype:str=None):
     if mimetype is None:
-        mimetype = mimetypes.guess_type(f"x.{ext}", strict=False)
-    behavior, types = _default_write_behaviors.get(mimetype, (_write_file_plaintext, [AnyType]))
+        mimetype = mimetypes.guess_type(f"x.{ext}", strict=False)[0]
+    behavior, types = _write_behaviors.get(mimetype, (_write_file_plaintext, [AnyType]))
     if value.type().issubtype(*types):
         return behavior(file, mimetype, value)
     raise exceptions.TTypeError(f"expected to write {repr(ext)} file using value of type: {",".join(t.name for t in types)}; got value {value.type().repr(value)} of type {value.type().name}")
@@ -747,13 +819,29 @@ def read_file_path(path:ScriptVariable[str]):
     with open(p, "rb") as f:
         return _read_file(f, p.rsplit(".",1)[-1])
 
+@f_read.overload(("file", File))
+def read_file(file:ScriptVariable[_file_wrapper]):
+    f = file.get().inner.file
+    return _read_file(f, f.name.rsplit(".",1)[-1])
+
 @f_write.overload(("path", String), ("value", AnyType))
 def write_file_path(path:ScriptVariable[str], value:ScriptVariable):
     p = path.get().inner
     with open(p, "wb") as f:
         return _write_file(f, p.rsplit(".",1)[-1], value)
 
+@f_write.overload(("file", File), ("value", AnyType))
+def write_file(file:ScriptVariable[_file_wrapper], value:ScriptVariable):
+    f = file.get().inner.file
+    return _write_file(f, f.name.rsplit(".",1)[-2], value)
+    
+@f_close.overload(("file", File))
+def close_file(file:ScriptVariable[_file_wrapper]):
+    file.get().inner.file.close()
+
 def activate():
+    if not mimetypes.inited:
+        mimetypes.init()
     script.DATA_TYPE_TABLE[NullType.inner] = NullType
     script.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly
     for dt in _builtin_types:
@@ -776,3 +864,27 @@ def activate():
     script.SCRIPT_FUNCTION_TABLE["parse_json"] = f_parse_json
     script.SCRIPT_FUNCTION_TABLE["read"] = f_read
     script.SCRIPT_FUNCTION_TABLE["write"] = f_write
+
+def deactivate():
+    utils.remove_type(NullType)
+    utils.remove_type(Map_readonly)
+    for dt in _builtin_types:
+        utils.remove_type(dt)
+    utils.remove_type(JsonProxyRoot)
+    utils.remove_type(JsonNode)
+
+    remove_read_behavior("application/json", _read_file_json)
+    remove_write_behavior("application/json", _write_file_json)
+
+    utils.remove_function("isinstance", f_isinstance)
+    utils.remove_function("issubtype", f_issubtype)
+    utils.remove_function("has", f_has)
+    utils.remove_function("hasfunc", f_hasfunc)
+    utils.remove_function("log", f_log)
+    utils.remove_function("error", f_error)
+    utils.remove_function("flush", f_flush)
+    utils.remove_function("wait", f_wait)
+    utils.remove_function("format_json", f_format_json)
+    utils.remove_function("parse_json", f_parse_json)
+    utils.remove_function("read", f_read)
+    utils.remove_function("write", f_write)

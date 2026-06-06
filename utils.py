@@ -38,6 +38,13 @@ def remove_type(dt:ScriptDataType):
     if var is not None and var.get().inner is dt.inner:
         del script.SCRIPT_GLOBAL_SCOPE[dt.name]
 
+def remove_function(name:str, f:Callable[[ScriptContext], Any]|None=None):
+    if f is None:
+        return script.SCRIPT_FUNCTION_TABLE.pop(name, None)
+    elif script.SCRIPT_FUNCTION_TABLE.get(name,None) is f:
+        del script.SCRIPT_FUNCTION_TABLE[name]
+        return f
+
 class ScriptRunner:
     def __init__(self):
         self.parse_trees:dict[bytes, ParsingNode] = {}
