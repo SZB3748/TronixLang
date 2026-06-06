@@ -35,22 +35,14 @@ SCRIPT_FUNCTION_TABLE["await"] = lambda ctx: ctx.params[0].get()
 
 raw = r"""
 
-x = 2;
+x = map(name:1);
 
-if x < 2 {
-    log(x, "< 2")
-} else if x > 2 {
-    log(x, "> 2")
-} else {
-    log(x, "== 2");
-    global y
-    y = async_returner(3)
-}
+log(x["name"]);
+log(x["name"] = 3);
+log(x);
 
-log(has("x"), has("y"), has("z"));
-if has("y") {
-    log(x + 2 * y / 3 % x*x)
-}
+y = "test test";
+log(y.uppercased)
 
 """
 

@@ -20,8 +20,9 @@ PATTERN_LITERAL = f"(?:(?P<value_null>null)|(?P<value_bool>true|false)|(?P<value
 PATTERN_VALUE = f"(?:{PATTERN_LITERAL}|(?P<value_name>{PATTERN_NAME}))"
 PATTERN_NAME_VALUE_PAIR = f"(?:(?P<name_value_pair_name>{PATTERN_NAME})\\s*:)"
 PATTERN_FUNCTION_BEGIN = f"(?:(?P<function_name>{PATTERN_NAME})\\s*\\()"
+PATTERN_SUBSCRIPT_BEGIN = f"(?:\\[)"
 #PATTERN_ASSIGN_BEGIN = f"(?:(?P<assign_name>{PATTERN_NAME})\\s*=)"
-PATTERN_MAIN = f"\\s*(?:(?P<keyword>{PATTERN_KEYWORDS})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<operator>{PATTERN_OPERATOR})|(?P<name_value_pair>{PATTERN_NAME_VALUE_PAIR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
+PATTERN_MAIN = f"\\s*(?:(?P<keyword>{PATTERN_KEYWORDS})|(?P<operator>{PATTERN_OPERATOR})|(?P<subscript>{PATTERN_SUBSCRIPT_BEGIN})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<name_value_pair>{PATTERN_NAME_VALUE_PAIR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
 
 RE_MAIN = re.compile(PATTERN_MAIN)
 
@@ -244,7 +245,7 @@ class _enclose_stack:
         self.prev = prev
 
 class _operation_node:
-    def __init__(self, position:int, operation:str, onode:ParsingNodeOperator, precedence:int, lhand:Self|Any, rhand:Self|Any):
+    def __init__(self, position:int, operation:str, onode:ParsingNodeOperator|ParsingNodeSubscript, precedence:int, lhand:Self|Any, rhand:Self|Any):
         self.position = position
         self.operation = operation
         self.onode = onode
@@ -252,33 +253,49 @@ class _operation_node:
         self.lhand = lhand
         self.rhand = rhand
 
+_VA_NAME = object()
+_VA_SUBSCRIPT = object()
+
+class _va_path_node:
+    def __init__(self, value, type):
+        self.value = value
+        self.type = type
+
 class _variable_access:
-    def __init__(self, name_path:list[str], value_root:ScriptVariable|ScriptValue|None=None):
-        self.name_path = name_path
+    def __init__(self, path:list[_va_path_node], value_root:ScriptVariable|ScriptValue|None=None):
+        self.path = path
         self.value_root = value_root
 
-    def resolve(self, stack:ns_stack, slice_end:int=None)->ScriptVariable|ScriptValue|None:
+    async def resolve(self, stack:ns_stack, slice_end:int=None)->ScriptVariable|ScriptValue|None:
         if slice_end is None:
-            slice_end = len(self.name_path)
+            slice_end = len(self.path)
             
         if self.value_root is None:
-            ns = stack.find_name(self.name_path[0])
+            first = self.path[0]
+            if first.type is not _VA_NAME:
+                raise exceptions._TronixRuntimeAssertion("variable access first path node cannot be a subscript without a root value")
+            ns = stack.find_name(first.value)
             if ns is None:
                 return None
-            target = ns[self.name_path[0]]
+            target = ns[first.value]
             i = 1
         elif isinstance(self.value_root, (ScriptValue, ScriptVariable)):
             target = self.value_root
             i = 0
         
-        subpath = self.name_path[i:slice_end]
+        subpath = self.path[i:slice_end]
         if not subpath:
             return target
         
         if isinstance(target, ScriptVariable):
             target = target.get()
-        for name in subpath:
-            target = target.type.getattr(target, name)
+        for node in subpath:
+            if node.type is _VA_NAME:
+                target = target.type.getattr(target, node.value)
+            elif node.type is _VA_SUBSCRIPT:
+                target = target.type.getitem(target, await node.value())
+            else:
+                raise exceptions._TronixRuntimeAssertion("variable access path node has unrecognized type")
         return target
 
 class _step_evaluation:
@@ -326,7 +343,7 @@ _escape_character_mapping = {
 }
 
 _operator_order = [
-    {"."},
+    {".", "u[]"},
     {"-u", "+u", "!u"},
     {"*", "/", "%"},
     {"+", "-"},
@@ -614,6 +631,14 @@ class Script:
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
                 current = node
                 i += r.end() - i
+            elif r["subscript"] is not None:
+                fail_vardecl()
+                end_condition()
+                node = ParsingNodeSubscript(r, current)
+                current.children.append(node)
+                enclstack = _enclose_stack("[","]", node, current, enclstack)
+                current = node
+                i += r.end() - i
             elif r["codeblock"] is not None:
                 fail_vardecl()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
@@ -678,9 +703,9 @@ class Script:
                 for pf in params:
                     param = await pf()
                     if isinstance(param, _variable_access):
-                        x = param.resolve(self.stack)
+                        x = await param.resolve(self.stack)
                         if x is None:
-                            raise exceptions.TMissingName(f"{repr(param.name_path[0])} not found")
+                            raise exceptions.TMissingName(f"{repr(param.path[0])} not found")
                         else:
                             param = x
                     if isinstance(param, ScriptValue):
@@ -738,14 +763,18 @@ class Script:
             rtv.cb = step_cb
 
     def _get_expression_operations(self, node:ParsingNodeExpression|ParsingNodeParentheses)->_operation_node:
-        operators:list[tuple[int, str, ParsingNodeOperator, int]] = []
+        operators:list[tuple[int, str, ParsingNodeOperator|ParsingNodeSubscript, int]] = []
         lh = None
         root_precedence_level = -1
         root_index = None
         root_direction = None
         for i, child in enumerate(node.children):
-            if isinstance(child, ParsingNodeOperator):
-                if lh is None:
+            issubscript = isinstance(child, ParsingNodeSubscript)
+            if issubscript or isinstance(child, ParsingNodeOperator):
+                if issubscript:
+                    assert lh is not None, "subscript must have left-hand value"
+                    operator = "u[]"
+                elif lh is None:
                     operator = f"{child.operator}u"
                 else:
                     operator = child.operator
@@ -774,7 +803,7 @@ class Script:
             return None #no operators, node only contains a value
         
         def _left_construct(midpoint:int, parent:_operation_node, bounds:tuple[int, int]):
-            if parent.operation.endswith("u"):
+            if parent.operation.endswith("u"): #TODO handle u[] operators
                 return
             
             plevel = -1
@@ -809,6 +838,9 @@ class Script:
                 _right_construct(next_midpoint, next, (next_midpoint+1, bounds[1]))
         
         def _right_construct(midpoint:int, parent:_operation_node, bounds:tuple[int, int]):
+            if parent.operation.startswith("u"):
+                return
+            
             plevel = -1
             next_midpoint = None
             next_direction = None
@@ -849,9 +881,9 @@ class Script:
     
     def _generate_operation_steps(self, operation:_operation_node|Any):
         if isinstance(operation, _operation_node):
-            lhs = self._generate_operation_steps(operation.lhand)
+            lhs = self._generate_operation_steps(operation.lhand)   
             rhs = self._generate_operation_steps(operation.rhand)
-            return _step_evaluation(_operator_step_generators[operation.operation](self, lhs, rhs))
+            return _step_evaluation(_operator_step_generators[operation.operation](self, operation, lhs, rhs))
         elif isinstance(operation, ParsingNodeFunction):
             step_eval = _step_evaluation()
             self._generate_function_steps(operation, rtv=step_eval)
@@ -869,7 +901,7 @@ class Script:
             async def _step():
                 v = vstep()
                 if isinstance(v, _variable_access):
-                    v = v.resolve(self.stack)
+                    v = await v.resolve(self.stack)
                 if isinstance(v, ScriptVariable):
                     v = v.get()
                 if not isinstance(v, ScriptValue):
@@ -898,7 +930,7 @@ class Script:
             async def _step():
                 v = await vstep()
                 if isinstance(v, _variable_access):
-                    v = v.resolve(self.stack)
+                    v = await v.resolve(self.stack)
                 if isinstance(v, ScriptVariable):
                     v = v.get()
                 if not isinstance(v, ScriptValue):
@@ -1021,9 +1053,9 @@ async def _resolve_h(script:Script, h)->ScriptVariable:
     if isinstance(h, _step_evaluation):
         h = await h()
     if isinstance(h, _variable_access):
-        x = h.resolve(script.stack)
+        x = await h.resolve(script.stack)
         if x is None:
-            raise exceptions.TMissingName(f"{repr(h.name_path[0])} not found")
+            raise exceptions.TMissingName(f"{repr(h.path[0])} not found")
         h = x 
         
     if isinstance(h, ScriptVariable):
@@ -1046,7 +1078,7 @@ async def _resolve_vh(script:Script, h)->ScriptValue:
     if isinstance(h, _step_evaluation):
         h = await h()
     if isinstance(h, _variable_access):
-        h = h.resolve(script.stack)
+        h = await h.resolve(script.stack)
     
     if isinstance(h, ScriptVariable):
         return h.get()
@@ -1068,16 +1100,16 @@ async def _resolve_ih(script:Script, h, make_name_if_missing:bool=False, get_att
     if isinstance(h, _step_evaluation):
         h = await h()
     if isinstance(h, _variable_access):
-        if get_attr and len(h.name_path) > 1:
-            x = h.resolve(script.stack, -1)
+        if get_attr and len(h.path) > 1:
+            x = await h.resolve(script.stack, -1)
             if x is None:
-                raise exceptions.TMissingName(f"{repr(h.name_path[0])} not found")
+                raise exceptions.TMissingName(f"{repr(h.path[0])} not found")
             elif isinstance(x, ScriptVariable):
-                return x.get(), h.name_path[-1]
+                return x.get(), h.path[-1]
             else:
-                return x, h.name_path[-1]
+                return x, h.path[-1]
         else:
-            h = h.resolve(script.stack)
+            h = await h.resolve(script.stack)
         
     if isinstance(h, ScriptVariable):
         return h
@@ -1107,12 +1139,12 @@ async def _resolve_nh(h)->_variable_access:
     elif isinstance(h, (ScriptValue, ScriptVariable)):
         return _variable_access([], h)
     elif isinstance(h, ParsingNodeName):
-        return _variable_access([h.name])
+        return _variable_access([_va_path_node(h.name, _VA_NAME)])
     else:
         raise exceptions._TronixRuntimeAssertion(f"invalid operand {_h} -> {h}")
 
 
-def _generate_add_steps(script:Script, lh, rh):
+def _generate_add_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1133,7 +1165,7 @@ def _generate_add_steps(script:Script, lh, rh):
         return x
     return _step
 
-def _generate_sub_steps(script:Script, lh, rh):
+def _generate_sub_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1155,7 +1187,7 @@ def _generate_sub_steps(script:Script, lh, rh):
     return _step
     
 
-def _generate_mlt_steps(script:Script, lh, rh):
+def _generate_mlt_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1177,7 +1209,7 @@ def _generate_mlt_steps(script:Script, lh, rh):
     return _step
     
 
-def _generate_div_steps(script:Script, lh, rh):
+def _generate_div_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1199,7 +1231,7 @@ def _generate_div_steps(script:Script, lh, rh):
     return _step
     
 
-def _generate_mod_steps(script:Script, lh, rh):
+def _generate_mod_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1221,7 +1253,7 @@ def _generate_mod_steps(script:Script, lh, rh):
     return _step
     
 
-def _generate_iadd_steps(script:Script, lh, rh):
+def _generate_iadd_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_ih(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute")
     elif not _validate_h(rh):
@@ -1243,7 +1275,7 @@ def _generate_iadd_steps(script:Script, lh, rh):
     return _step
     
 
-def _generate_isub_steps(script:Script, lh, rh):
+def _generate_isub_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_ih(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute")
     elif not _validate_h(rh):
@@ -1265,7 +1297,7 @@ def _generate_isub_steps(script:Script, lh, rh):
     return _step
     
 
-def _generate_imlt_steps(script:Script, lh, rh):
+def _generate_imlt_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_ih(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute")
     elif not _validate_h(rh):
@@ -1287,7 +1319,7 @@ def _generate_imlt_steps(script:Script, lh, rh):
     return _step
     
 
-def _generate_idiv_steps(script:Script, lh, rh):
+def _generate_idiv_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_ih(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute")
     elif not _validate_h(rh):
@@ -1309,7 +1341,7 @@ def _generate_idiv_steps(script:Script, lh, rh):
     return _step
     
 
-def _generate_imod_steps(script:Script, lh, rh):
+def _generate_imod_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_ih(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute")
     elif not _validate_h(rh):
@@ -1330,14 +1362,41 @@ def _generate_imod_steps(script:Script, lh, rh):
         return x
     return _step
     
-def _generate_dot_steps(script:Script, lh, rh):
+def _generate_dot_steps(script:Script, op:_operation_node, lh, rh):
     async def _step():
         l = await _resolve_nh(lh)
         r = await _resolve_nh(rh)
-        return _variable_access([*l.name_path, *r.name_path], l.value_root)
+        return _variable_access([*l.path, *r.path], l.value_root)
     return _step
 
-def _generate_assign_steps(script:Script, lh, rh):
+def _generate_subscript_steps(script:Script, op:_operation_node, lh, rh):
+    assert rh is None, f"subscript should not be passed a right-hand operand: {rh}"
+    pnode = op.onode
+    assert isinstance(pnode, ParsingNodeSubscript), ""
+    if not pnode.children:
+        ... #TODO error x[...] needs something for ..., got nothing
+    elif len(pnode.children) > 1:
+        ... #TODO error x[...] only needs one evaluable expression for ..., got n expressions
+    expr = pnode.children[0]
+    if not isinstance(expr, (ParsingNodeParentheses, ParsingNodeExpression)):
+        ... #TODO error x[...] requires an evaluable expression for ...
+    inner_step = _step_evaluation()
+    script._generate_expression_steps(expr, rtv=inner_step)
+
+    async def _resolve_inner():
+        item_key = await inner_step()
+        if isinstance(item_key, ScriptValue):
+            item_key = ScriptVariable(item_key)
+        elif not isinstance(item_key, ScriptVariable):
+            raise exceptions.TMustEvaluate(f"x[...] requires that ... evaluates but it resulted in no value")
+        return item_key
+
+    async def _step():
+        l = await _resolve_nh(lh)
+        return _variable_access([*l.path, _va_path_node(_resolve_inner, _VA_SUBSCRIPT)], l.value_root)
+    return _step
+
+def _generate_assign_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_ih(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute")
     elif not _validate_h(rh):
@@ -1352,8 +1411,14 @@ def _generate_assign_steps(script:Script, lh, rh):
         else:
             lv, ln = l
             r = await _resolve_h(script, rh)
+            if ln.type is _VA_NAME:
+                f, vs = lv.type.setattr, (lv, ln.value, r)
+            elif ln.type is _VA_SUBSCRIPT:
+                f, vs = lv.type.setitem, (lv, await ln.value(), r)
+            else:
+                raise exceptions._TronixRuntimeAssertion("variable access path node has unrecognized type")
             try:
-                x = lv.type.setattr(lv, ln, r)
+                x = f(*vs)
             except NotImplementedError as e:
                 raise exceptions.TNotImplemented("operation is not implemented") from e
             except Exception as e:
@@ -1365,10 +1430,9 @@ def _generate_assign_steps(script:Script, lh, rh):
             return x
     return _step
 
-def _generate_uadd_steps(script:Script, lh, rh):
-    if lh is not None:
-        raise exceptions._TronixRuntimeAssertion(f"unary operations should not be passed a left-hand operand: {lh}")
-    elif not _validate_h(rh):
+def _generate_uadd_steps(script:Script, op:_operation_node, lh, rh):
+    assert lh is None, f"unary operations should not be passed a left-hand operand: {lh}"
+    if not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"operand must resolve to a value")
     async def _step():
         h = await _resolve_h(script, rh)
@@ -1385,10 +1449,9 @@ def _generate_uadd_steps(script:Script, lh, rh):
         return x
     return _step
     
-def _generate_usub_steps(script:Script, lh, rh):
-    if lh is not None:
-        raise exceptions._TronixRuntimeAssertion(f"unary operations should not be passed a left-hand operand: {lh}")
-    elif not _validate_h(rh):
+def _generate_usub_steps(script:Script, op:_operation_node, lh, rh):
+    assert lh is None, f"unary operations should not be passed a left-hand operand: {lh}"
+    if not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"operand must resolve to a value")
     async def _step():
         h = await _resolve_h(script, rh)
@@ -1405,10 +1468,9 @@ def _generate_usub_steps(script:Script, lh, rh):
         return x
     return _step
 
-def _generate_unot_steps(script:Script, lh, rh):
-    if lh is not None:
-        raise exceptions._TronixRuntimeAssertion(f"unary operations should not be passed a left-hand operand: {lh}")
-    elif not _validate_h(rh):
+def _generate_unot_steps(script:Script, op:_operation_node, lh, rh):
+    assert lh is None, f"unary operations should not be passed a left-hand operand: {lh}"
+    if not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"operand must resolve to a value")
     async def _step():
         h = await _resolve_h(script, rh)
@@ -1426,7 +1488,7 @@ def _generate_unot_steps(script:Script, lh, rh):
     return _step
 
 
-def _generate_gt_steps(script:Script, lh, rh):
+def _generate_gt_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1447,7 +1509,7 @@ def _generate_gt_steps(script:Script, lh, rh):
         return x
     return _step
 
-def _generate_lt_steps(script:Script, lh, rh):
+def _generate_lt_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1468,7 +1530,7 @@ def _generate_lt_steps(script:Script, lh, rh):
         return x
     return _step
 
-def _generate_ge_steps(script:Script, lh, rh):
+def _generate_ge_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1489,7 +1551,7 @@ def _generate_ge_steps(script:Script, lh, rh):
         return x
     return _step
 
-def _generate_le_steps(script:Script, lh, rh):
+def _generate_le_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1510,7 +1572,7 @@ def _generate_le_steps(script:Script, lh, rh):
         return x
     return _step
 
-def _generate_eq_steps(script:Script, lh, rh):
+def _generate_eq_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1531,7 +1593,7 @@ def _generate_eq_steps(script:Script, lh, rh):
         return x
     return _step
 
-def _generate_ne_steps(script:Script, lh, rh):
+def _generate_ne_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_h(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
     elif not _validate_h(rh):
@@ -1554,7 +1616,8 @@ def _generate_ne_steps(script:Script, lh, rh):
 
 
 
-_operator_step_generators:dict[str, Callable[[Script, Any, Any], _variable_access|ScriptValue]] = {
+_operator_step_generators:dict[str, Callable[[Script, _operation_node, Any, Any], _variable_access|ScriptValue]] = {
+    "u[]": _generate_subscript_steps,
     ".": _generate_dot_steps,
     "-u": _generate_usub_steps,
     "+u": _generate_uadd_steps,

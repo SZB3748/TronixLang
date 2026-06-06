@@ -387,7 +387,7 @@ class ScriptAttributeHandler[T,K]:
             p = self
             keyx = key.get().inner
             while p is not None:
-                attr = self.attributes.get(keyx, None)
+                attr = self.attributes.get(keyx, self.wildcard)
                 if not (attr is None or attr._getitem is None):
                     return attr._getitem(object, key)
                 p = self.parent
@@ -411,7 +411,7 @@ class ScriptAttributeHandler[T,K]:
             p = self
             keyx = key.get().inner
             while p is not None:
-                attr = self.attributes.get(keyx, None)
+                attr = self.attributes.get(keyx, self.wildcard)
                 if not (attr is None or attr._setitem is None):
                     return attr._setitem(object, key, value)
                 p = self.parent
@@ -435,7 +435,7 @@ class ScriptAttributeHandler[T,K]:
             p = self
             keyx = key.get().inner
             while p is not None:
-                attr = self.attributes.get(keyx, None)
+                attr = self.attributes.get(keyx, self.wildcard)
                 if not (attr is None or attr._delitem is None):
                     return attr._delitem(object, key)
                 p = self.parent

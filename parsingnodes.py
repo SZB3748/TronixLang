@@ -43,9 +43,11 @@ class ParsingNodeOperator(ParsingNode_Terminating):
         super().__init__(match, parent)
         self.operator = operator
 
-class ParsingNodeIfStatement(ParsingNode):
+class ParsingNodeSubscript(ParsingNode):
     pass
 
+class ParsingNodeIfStatement(ParsingNode):
+    pass
 class ParsingNodeConditionPair(ParsingNode):
     def __init__(self, match:Match, parent:ParsingNodeIfStatement|None, condition:ParsingNodeExpression|ParsingNodeParentheses|None=None, codeblock:ParsingNodeCodeBlock|None=None, takes_condition:bool=False):
         super().__init__(match, parent, [])

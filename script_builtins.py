@@ -68,7 +68,7 @@ class _IntegerType(ScriptDataType[int]):
 
 _StringTypeAttrs = utils.ScriptAttributeHandler[str, int]()
 @_StringTypeAttrs.enforce_child_attrs(*utils.ATTR_ATTACH_ATTRS)
-@_StringTypeAttrs.attach_some(*utils.ATTR_ATTACH_ATTRS)
+@_StringTypeAttrs.attach
 class _StringType(ScriptDataType[str]):
 
     f_construct:ScriptFunction[Self] = ScriptFunction()
@@ -536,9 +536,9 @@ JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TY
 JsonNode = _JsonProxyNodeType("JsonNode", json_proxy.JsonProxyNode, BASE_TYPE)
 File = _FileType("File", _file_wrapper, BASE_TYPE)
 
-_StringTypeAttrs.wildcard.itemgetter(String.getitem)
+_StringTypeAttrs.wildcard.itemgetter(BASE_TYPE.getitem).itemsetter(BASE_TYPE.setitem).itemdeleter(BASE_TYPE.delitem)
 _ListTypeAttrs.wildcard.itemgetter(List.getitem).itemsetter(List.setitem).itemdeleter(List.delitem)
-_MapTypeAttrs.wildcard.itemgetter(Map.getitem).itemsetter(Map.setitem).itemdeleter(Map.delitem)
+_MapTypeAttrs.wildcard.itemgetter(BASE_TYPE.getitem).itemsetter(BASE_TYPE.setitem).itemdeleter(BASE_TYPE.delitem)
 _JsonProxyNodeTypeAttrs.wildcard.reverse_attach(JsonNode)
 
 null = ScriptValue(NullType, None)
