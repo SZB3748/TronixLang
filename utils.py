@@ -132,19 +132,19 @@ def __error_repr_attr_key(n:str|ScriptVariable):
 _DEFAULT_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only get {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
 _DEFAULT_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only assign to {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
 _DEFAULT_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only delete {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
-_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not get {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
-_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not assign {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
-_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not delete {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
 
 _DEFAULT_ITEM_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only get {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
 _DEFAULT_ITEM_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only assign to {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
 _DEFAULT_ITEM_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only delete {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not get {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not assign {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can not delete {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
 
 _DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable (you can't do value[...])", error=exceptions.TNotImplemented)
-_DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"can not assign value of type {v.type().name} to {__error_repr_attr_key(n)} {"item" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
+_DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign value of type {v.type().name} to {__error_repr_attr_key(n)} {"item" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
 
 def SimpleGetAttribute(name:str|None=None)->AttributeGetter:
     def f(o:ScriptValue, n:str):
@@ -276,10 +276,10 @@ class ScriptValueAttribute[T, K, U]:
         return self.getter(_DEFAULT_READ_NO_ACCESS if no_access is None else no_access)
     
     def noset(self, no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
-        return self.getter(_DEFAULT_WRITE_NO_ACCESS if no_access is None else no_access)
+        return self.setter(_DEFAULT_WRITE_NO_ACCESS if no_access is None else no_access)
     
     def nodel(self, no_access:ScriptAttributeNoAccess[T,K,U]|None=None):
-        return self.getter(_DEFAULT_DELETE_NO_ACCESS if no_access is None else no_access)
+        return self.deleter(_DEFAULT_DELETE_NO_ACCESS if no_access is None else no_access)
 
     def getter(self, f:Callable[[ScriptValue[T], str], ScriptValue[U]]):
         self._get = f

@@ -6,6 +6,7 @@ import asyncio
 import json
 import mimetypes
 import string
+import sys
 from typing import BinaryIO, IO
 import uuid
 
@@ -217,6 +218,23 @@ def pair_alias_subtype(name:str, firstnames:list[str], secondnames:list[str], in
         attrs.alias(_PairTypeAttrs["second"], *secondnames)
     return _PairSubType(name, inner_type, Pair)
 
+def resolve_index_value(obj:ScriptValue, item:ScriptVariable):
+    v = item.get()
+    if v.type.issubtype(Integer):
+        assert isinstance(v.inner, int)
+        return v.inner
+    elif v.type.issubtype(Pair):
+        assert isinstance(v.inner, _pair)
+        try:
+            begin = int(v.inner.first)
+            end = int(v.inner.second)
+        except TypeError:
+            null_name = utils.script_repr(null)
+            raise exceptions.TTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}|{null_name}, {Integer.name}|{null_name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
+        return slice(begin, end)
+    else:
+        raise exceptions.TTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
+
 _ListTypeAttrs = utils.ScriptAttributeHandler[list,int](wildcard=utils.ScriptValueAttribute[list, int, Any](""))
 @_ListTypeAttrs.enforce_child_attrs(*utils.ATTR_ATTACH_ATTRS)
 @_ListTypeAttrs.attach_some(*utils.ATTR_ATTACH_ATTRS)
@@ -235,55 +253,20 @@ class _ListType(ScriptDataType[list]):
         return l.extend(utils.deserialize_value(xi).inner for xi in x)
     
     attrs = _ListTypeAttrs
+    attrs.entry("length").readonly(lambda o, n: script.wrap_python_value(len(o.inner)))
 
     def getitem(self, obj, item):
-        v = item.get()
-        if v.type.issubtype(Integer):
-            return script.wrap_python_value(obj.inner[v.inner])
-        elif v.type.issubtype(Pair):
-            assert isinstance(v.inner, _pair)
-            try:
-                begin = int(v.inner.first)
-                end = int(v.inner.second)
-            except TypeError:
-                raise exceptions.TTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}, {Integer.name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
-            return script.wrap_python_value(obj.inner[begin:end])
-        else:
-            raise exceptions.TTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
+        return script.wrap_python_value(obj.inner[resolve_index_value(obj, item)])
 
     def setitem(self, obj, item, value):
-        v = item.get()
         x = value.get()
-        if v.type.issubtype(Integer):
-            obj.inner[v.inner] = x.inner
-        elif v.type.issubtype(Pair):
-            assert isinstance(v.inner, _pair)
-            try:
-                begin = int(v.inner.first)
-                end = int(v.inner.second)
-            except TypeError:
-                raise exceptions.TTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}, {Integer.name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
-            obj.inner[begin:end] = x.inner
-        else:
-            raise exceptions.TTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
+        obj.inner[resolve_index_value(obj, item)] = x.inner
         return x
 
     def delitem(self, obj, item):
-        v = item.get()
-        if v.type.issubtype(Integer):
-            x = script.wrap_python_value(obj.inner[v.inner])
-            del obj.inner[v.inner]
-        elif v.type.issubtype(Pair):
-            assert isinstance(v.inner, _pair)
-            try:
-                begin = int(v.inner.first)
-                end = int(v.inner.second)
-            except TypeError:
-                raise exceptions.TTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}, {Integer.name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
-            x = script.wrap_python_value(obj.inner[begin:end])
-            del obj.inner[begin:end]
-        else:
-            raise exceptions.TTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
+        index = resolve_index_value(obj, item)
+        x = script.wrap_python_value(obj.inner[index])
+        del obj.inner[index]
         return x
 
     def repr(self, value):
@@ -308,12 +291,25 @@ class _MapType(ScriptDataType[dict]):
         return d
 
     attrs = _MapTypeAttrs
+    attrs.entry("length").readonly(lambda o, n: script.wrap_python_value(len(o.inner)))
 
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({", ".join((k:=wrap_python_value(kx)).type.repr(k).inner + ": " + (v:=wrap_python_value(vx)).type.repr(v).inner for kx, vx in value.inner.items())})")
 
+class _rolist_dummy(list):
+    pass
+
 class _rodict_dummy(dict):
     pass
+
+
+_ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_dummy,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
+@_ListReadonlyTypeAttrs.enforce_child_attrs()
+@_ListReadonlyTypeAttrs.attach
+class _ListReadonlyType(_ListType):
+    
+    attrs = _ListReadonlyTypeAttrs
+    attrs.wildcard.noset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).nodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
 
 _MapReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rodict_dummy,Any](_MapTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
 @_MapReadonlyTypeAttrs.enforce_child_attrs()
@@ -321,6 +317,7 @@ _MapReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rodict_dummy,Any](_MapType
 class _MapReadonlyType(_MapType):
 
     attrs = _MapReadonlyTypeAttrs
+    attrs.wildcard.noset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).nodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
 
 _UUIDTypeAttrs = utils.ScriptAttributeHandler[uuid.UUID,Any](no_subscripting=True)
 @_UUIDTypeAttrs.enforce_child_attrs()
@@ -530,6 +527,7 @@ NamePair = _NameValuePairType("namepair", ScriptNameValuePair, BASE_TYPE)
 Pair = _PairType("pair", _pair, BASE_TYPE)
 List = _ListType("list", list, BASE_TYPE)
 Map = _MapType("map", dict, BASE_TYPE)
+List_readonly = _ListReadonlyType("_list_readonly", _rolist_dummy, List)
 Map_readonly = _MapReadonlyType("_map_readonly", _rodict_dummy, Map)
 UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
 JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TYPE)
@@ -635,12 +633,15 @@ def map_construct(self, *items:ScriptVariable[_pair|ScriptNameValuePair]):
 def uuid_construct(self, hex:ScriptVariable[str]):
     return ScriptValue(self, uuid.UUID(hex))
 
-@_FileType.f_construct.overload(("path", String), ("mode", String, "read"))
-def File_construct(self, path:ScriptVariable[str], mode:ScriptVariable[str]):
+def resolve_file_mode(mode:ScriptVariable[str]):
     m = mode.get().inner.lower()
     if m not in ("read", "write", "append"):
         raise exceptions.TBadValue(f"file mode must be read, write, or append; got {mode.get().inner}")
-    return ScriptValue(self, _file_wrapper(open(path.get().inner, m[0]+"b")))
+    return m[0]
+
+@_FileType.f_construct.overload(("path", String), ("mode", String, "read"))
+def File_construct(self, path:ScriptVariable[str], mode:ScriptVariable[str]):
+    return ScriptValue(self, _file_wrapper(open(path.get().inner, resolve_file_mode(mode)+"b")))
 
 f_isinstance = ScriptFunction()
 f_issubtype = ScriptFunction()
@@ -655,6 +656,9 @@ f_parse_json = ScriptFunction()
 f_read = ScriptFunction()
 f_write = ScriptFunction()
 f_close = ScriptFunction()
+f_append = ScriptFunction()
+f_find = ScriptFunction()
+f_contains = ScriptFunction()
 
 @f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
@@ -839,11 +843,86 @@ def write_file(file:ScriptVariable[_file_wrapper], value:ScriptVariable):
 def close_file(file:ScriptVariable[_file_wrapper]):
     file.get().inner.file.close()
 
+
+@f_append.overload(("target", List), ("value", [AnyType, NamePair]))
+def list_append_value(target:ScriptVariable[list], value:ScriptVariable):
+    v = target.get()
+    v.inner.append(value.get().inner)
+    return v
+
+_STR_FIND_STOP_DEFAULT = sys.maxsize
+@f_find.overload(("target", String), ("value", String), ("start", Integer, 0), ("stop", Integer, _STR_FIND_STOP_DEFAULT))
+def str_find_value(target:ScriptVariable[str], value:ScriptVariable[str], start:ScriptVariable[int], stop:ScriptVariable[int]):
+    istart = start.get().inner
+    istop = stop.get().inner
+    if istart == 0:
+        istart = None
+    if istop == sys.maxsize:
+        istop = None
+    return script.ScriptValue(Integer, target.get().inner.find(value.get().inner, start=istart, end=istop))
+
+_LIST_FIND_STOP_DEFAULT = sys.maxsize
+@f_find.overload(("target", List), ("value", [AnyType, NamePair]), ("start", Integer, 0), ("stop", Integer, _LIST_FIND_STOP_DEFAULT))
+def list_find_value(target:ScriptVariable[list], value:ScriptVariable, start:ScriptVariable[int], stop:ScriptVariable[int]):
+    t = target.get().inner
+    v = value.get().inner
+    istart = start.get().inner
+    istop = stop.get().inner
+    try:
+        index = t.index(v, start=istart, stop=istop)
+    except ValueError:
+        index = -1
+    return script.ScriptValue(Integer, index)
+
+@f_find.overload(("target", Map), ("value", [AnyType, NamePair]))
+def map_find_value(target:ScriptVariable[dict], value:ScriptVariable):
+    v = value.get()
+    for key, val in target.get().inner.items():
+        mv = script.wrap_python_value(val)
+        try:
+            x = v.type.eq(v, mv)
+        except NotImplementedError as e:
+            raise exceptions.TNotImplemented("'==' operation is not implemented") from e
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if x is None:
+            raise exceptions.TMustEvaluate(f"'==' operation must evaluate but resulted in no value")
+        elif x is NotImplemented:
+            raise exceptions.TNotImplemented("'==' operation is not implemented")
+        
+        if x.inner:
+            return script.wrap_python_value(key)
+    
+    #TODO error value not found
+
+@f_contains.overload(("target", String), ("value", String))
+def str_contains(target:ScriptVariable[str], value:ScriptVariable[str]):
+    if value.get().inner in target.get().inner:
+        return true
+    else:
+        return false
+    
+@f_contains.overload(("target", List), ("value", [AnyType, NamePair]))
+def list_contains(target:ScriptVariable[list], value:ScriptVariable):
+    if value.get().inner in target.get().inner:
+        return true
+    else:
+        return false
+
+@f_contains.overload(("target", Map), ("value", [AnyType, NamePair]))
+def map_contains(target:ScriptVariable[dict], value:ScriptVariable):
+    if value.get().inner in target.get().inner:
+        return true
+    else:
+        return false
+
+
 def activate():
     if not mimetypes.inited:
         mimetypes.init()
-    script.DATA_TYPE_TABLE[NullType.inner] = NullType
-    script.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly
+    script.DATA_TYPE_TABLE[NullType.inner] = NullType.init()
+    script.DATA_TYPE_TABLE[List_readonly.inner] = List_readonly.init()
+    script.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly.init()
     for dt in _builtin_types:
         utils.add_type(dt)
     utils.add_type(JsonProxyRoot, constructor=False)
@@ -864,9 +943,13 @@ def activate():
     script.SCRIPT_FUNCTION_TABLE["parse_json"] = f_parse_json
     script.SCRIPT_FUNCTION_TABLE["read"] = f_read
     script.SCRIPT_FUNCTION_TABLE["write"] = f_write
+    script.SCRIPT_FUNCTION_TABLE["append"] = f_append
+    script.SCRIPT_FUNCTION_TABLE["find"] = f_find
+    script.SCRIPT_FUNCTION_TABLE["contains"] = f_contains
 
 def deactivate():
     utils.remove_type(NullType)
+    utils.remove_type(List_readonly)
     utils.remove_type(Map_readonly)
     for dt in _builtin_types:
         utils.remove_type(dt)
@@ -888,3 +971,6 @@ def deactivate():
     utils.remove_function("parse_json", f_parse_json)
     utils.remove_function("read", f_read)
     utils.remove_function("write", f_write)
+    utils.remove_function("append", f_append)
+    utils.remove_function("find", f_find)
+    utils.remove_function("contains", f_contains)
