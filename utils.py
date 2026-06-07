@@ -626,15 +626,20 @@ class ScriptFunction[T]:
         b.instance = instance
         return b
 
-    def add_overload(self, params:ScriptFunctionParamSet, cb:Callable[..., ScriptValue]):
+    def add_overload(self, params:ScriptFunctionParamSet, cb:Callable[..., ScriptValue], priority:int|None=None):
         params.check()
         for existing in self.signature.overloads:
             if existing == params:
                 raise exceptions.DuplicateOverloadException("overload already exists in this function")
-        self.signature.overloads.append(params)
-        self.cbs.append(cb)
+        if priority is None:
+            self.signature.overloads.append(params)
+            self.cbs.append(cb)
+        else:
+            self.signature.overloads.insert(priority, params)
+            self.cbs.insert(priority, cb)
 
-    def overload(self, *params:ScriptFunctionParam_Like, auto:bool=False, pass_ctx:bool=False):
+
+    def overload(self, *params:ScriptFunctionParam_Like, auto:bool=False, pass_ctx:bool=False, priority:int|None=None):
         def decor(cb:Callable[..., ScriptValue]):
             if auto and not params:
                 ... #TODO inspect function and determine types from annotations
@@ -670,7 +675,7 @@ class ScriptFunction[T]:
                     elif not isinstance(p, ScriptFunctionParam):
                         raise ValueError(f"cannot construct script function parameter from value: {p}")
                     plist.append(p)  
-                self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx), cb)
+                self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx), cb, priority=priority)
             return cb
         return decor
     
