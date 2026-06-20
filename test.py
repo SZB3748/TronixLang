@@ -34,16 +34,19 @@ SCRIPT_FUNCTION_TABLE["async_returner"] = async_returner
 SCRIPT_FUNCTION_TABLE["await"] = lambda ctx: ctx.params[0].get()
 
 raw = r"""
+d = seconds(1);
+log(d);
+a = d;
+d += 61;
+log(d, ";", a);
+x = d + minutes(1);
+a = x;
+x += hours(2);
+log(x, ";", a);
 
-x = map(name:1);
-
-log(x["name"]);
-log(x["name"] = 3);
-log(x);
-
-y = "test test";
-log(y.uppercased)
-
+l = list(x, a);
+l[1] += -milliseconds(500);
+log(l);
 """
 
 s = Script(raw)

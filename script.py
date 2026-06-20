@@ -148,29 +148,49 @@ class ScriptDataType[T]:
         return wrap_python_value(lhs.get().inner % rhs.get().inner)
     
     def iadd(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
-        x = wrap_python_value(lhs.get().inner + rhs.get().inner)
-        lhs.assign(x)
-        return x
+        l = lhs.get()
+        x = l.inner
+        x += rhs.get().inner
+        if x is l.inner:
+            return l
+        else:
+            return wrap_python_value(x)
     
     def isub(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
-        x = wrap_python_value(lhs.get().inner - rhs.get().inner)
-        lhs.assign(x)
-        return x
+        l = lhs.get()
+        x = l.inner
+        x -= rhs.get().inner
+        if x is l.inner:
+            return l
+        else:
+            return wrap_python_value(x)
     
     def imlt(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
-        x = wrap_python_value(lhs.get().inner * rhs.get().inner)
-        lhs.assign(x)
-        return x
+        l = lhs.get()
+        x = l.inner
+        x *= rhs.get().inner
+        if x is l.inner:
+            return l
+        else:
+            return wrap_python_value(x)
     
     def idiv(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
-        x = wrap_python_value(lhs.get().inner / rhs.get().inner)
-        lhs.assign(x)
-        return x
+        l = lhs.get()
+        x = l.inner
+        x /= rhs.get().inner
+        if x is l.inner:
+            return l
+        else:
+            return wrap_python_value(x)
     
     def imod(self, lhs:ScriptVariable[T], rhs:ScriptVariable)->ScriptValue|None:
-        x = wrap_python_value(lhs.get().inner % rhs.get().inner)
-        lhs.assign(x)
-        return x
+        l = lhs.get()
+        x = l.inner
+        x %= rhs.get().inner
+        if x is l.inner:
+            return l
+        else:
+            return wrap_python_value(x)
     
     def uadd(self, h:ScriptVariable[T])->ScriptValue|None:
         return wrap_python_value(+h.get().inner)
@@ -606,7 +626,7 @@ class Script:
                     elif v_float:
                         value = float(v_float)
                     elif v_bool:
-                        value = v_bool == "true"
+                        value = bool(v_bool == "true")
                     elif v_null:
                         value = None
                     else:
@@ -797,6 +817,7 @@ class Script:
             elif lh is None:
                 lh = child
             else:
+                print(child)
                 raise exceptions.TIncorrectOperandOrder("consecutive operands where operator is expected", target=child)
 
         if root_index is None:
@@ -1253,25 +1274,61 @@ def _generate_mod_steps(script:Script, op:_operation_node, lh, rh):
     return _step
     
 
+async def _inplace_operator_step(script:Script, op:_operation_node, lh, rh, opname:str):
+    l = await _resolve_ih(script, lh, get_attr=True)
+    if isinstance(l, ScriptVariable):
+        lvar = l
+        f = l.assign
+        vs = ()
+        takes_ixvar = False
+    else:
+        lv, ln = l
+        lvar = ScriptVariable(await _variable_access([ln], value_root=lv).resolve(script.stack))
+        if ln.type is _VA_NAME:
+            f, vs = lv.type.setattr, (lv, ln.value)
+        elif ln.type is _VA_SUBSCRIPT:
+            f, vs = lv.type.setitem, (lv, await ln.value())
+        else:
+            raise exceptions._TronixRuntimeAssertion("variable access path node has unrecognized type")
+        takes_ixvar = True
+    r = await _resolve_h(script, rh)
+    try:
+        ix:ScriptValue = getattr(lvar.type(), opname)(lvar, r)
+    except NotImplementedError as e:
+        raise exceptions.TNotImplemented("operation is not implemented") from e
+    except Exception as e:
+        raise exceptions.wrap(e)
+    if ix is None:
+        raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
+    elif ix is NotImplemented:
+        raise exceptions.TNotImplemented("operation is not implemented")
+    
+    if lvar.get().inner is ix.inner:
+        return ix
+    else:
+        if takes_ixvar:
+            ix_pass = ScriptVariable(ix)
+        else:
+            ix_pass = ix
+        try:
+            x = f(*vs, ix_pass)
+        except NotImplementedError as e:
+            raise exceptions.TNotImplemented("operation is not implemented") from e
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if x is None:
+            return ix
+        elif x is NotImplemented:
+            raise exceptions.TNotImplemented("operation is not implemented")
+        return x
+
 def _generate_iadd_steps(script:Script, op:_operation_node, lh, rh):
     if not _validate_ih(lh):
         raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute")
     elif not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
     async def _step():
-        l = await _resolve_ih(script, lh)
-        r = await _resolve_h(script, rh)
-        try:
-            x = l.type().iadd(l, r)
-        except NotImplementedError as e:
-            raise exceptions.TNotImplemented("operation is not implemented") from e
-        except Exception as e:
-            raise exceptions.wrap(e)
-        if x is None:
-            raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
-        elif x is NotImplemented:
-            raise exceptions.TNotImplemented("operation is not implemented")
-        return x
+        return await _inplace_operator_step(script, op, lh, rh, "iadd")
     return _step
     
 
@@ -1281,19 +1338,7 @@ def _generate_isub_steps(script:Script, op:_operation_node, lh, rh):
     elif not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
     async def _step():
-        l = await _resolve_ih(script, lh)
-        r = await _resolve_h(script, rh)
-        try:
-            x = l.type().isub(l, r)
-        except NotImplementedError as e:
-            raise exceptions.TNotImplemented("operation is not implemented") from e
-        except Exception as e:
-            raise exceptions.wrap(e)
-        if x is None:
-            raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
-        elif x is NotImplemented:
-            raise exceptions.TNotImplemented("operation is not implemented")
-        return x
+        return await _inplace_operator_step(script, op, lh, rh, "isub")
     return _step
     
 
@@ -1303,19 +1348,7 @@ def _generate_imlt_steps(script:Script, op:_operation_node, lh, rh):
     elif not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
     async def _step():
-        l = await _resolve_ih(script, lh)
-        r = await _resolve_h(script, rh)
-        try:
-            x = l.type().imlt(l, r)
-        except NotImplementedError as e:
-            raise exceptions.TNotImplemented("operation is not implemented") from e
-        except Exception as e:
-            raise exceptions.wrap(e)
-        if x is None:
-            raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
-        elif x is NotImplemented:
-            raise exceptions.TNotImplemented("operation is not implemented")
-        return x
+        return await _inplace_operator_step(script, op, lh, rh, "imlt")
     return _step
     
 
@@ -1325,19 +1358,7 @@ def _generate_idiv_steps(script:Script, op:_operation_node, lh, rh):
     elif not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
     async def _step():
-        l = await _resolve_ih(script, lh)
-        r = await _resolve_h(script, rh)
-        try:
-            x = l.type().idiv(l, r)
-        except NotImplementedError as e:
-            raise exceptions.TNotImplemented("operation is not implemented") from e
-        except Exception as e:
-            raise exceptions.wrap(e)
-        if x is None:
-            raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
-        elif x is NotImplemented:
-            raise exceptions.TNotImplemented("operation is not implemented")
-        return x
+        return await _inplace_operator_step(script, op, lh, rh, "idiv")
     return _step
     
 
@@ -1347,19 +1368,7 @@ def _generate_imod_steps(script:Script, op:_operation_node, lh, rh):
     elif not _validate_h(rh):
         raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value")
     async def _step():
-        l = await _resolve_ih(script, lh)
-        r = await _resolve_h(script, rh)
-        try:
-            x = l.type().imod(l, r)
-        except NotImplementedError as e:
-            raise exceptions.TNotImplemented("operation is not implemented") from e
-        except Exception as e:
-            raise exceptions.wrap(e)
-        if x is None:
-            raise exceptions.TMustEvaluate(f"operation must evaluate but resulted in no value")
-        elif x is NotImplemented:
-            raise exceptions.TNotImplemented("operation is not implemented")
-        return x
+        return await _inplace_operator_step(script, op, lh, rh, "imod")
     return _step
     
 def _generate_dot_steps(script:Script, op:_operation_node, lh, rh):

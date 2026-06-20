@@ -24,7 +24,7 @@ def add_type(dt:ScriptDataType, constructor:bool=True, init:bool=True):
         dt.init()
     script.DATA_TYPE_TABLE[dt.inner] = dt
     if constructor:
-        script.SCRIPT_FUNCTION_TABLE[dt.name] = dt.construct
+        merge_function(dt.name, dt.construct)
     script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(dt, dt.inner))
 
 def remove_type(dt:ScriptDataType):
@@ -33,16 +33,80 @@ def remove_type(dt:ScriptDataType):
     if script.DATA_TYPE_TABLE.get(dt.inner,None) is dt:
         del script.DATA_TYPE_TABLE[dt.inner]
     if script.SCRIPT_FUNCTION_TABLE.get(dt.name,None) is dt.construct:
-        del script.SCRIPT_FUNCTION_TABLE[dt.name]
+        remove_function(dt.name, dt.construct)
     var = script.SCRIPT_GLOBAL_SCOPE.get(dt.name,None)
     if var is not None and var.get().inner is dt.inner:
         del script.SCRIPT_GLOBAL_SCOPE[dt.name]
 
+def merge_function(name:str, f:Callable[[ScriptContext], Any]):
+    current = script.SCRIPT_FUNCTION_TABLE.get(name, None)
+    if current is None:
+        script.SCRIPT_FUNCTION_TABLE[name] = f
+        return f
+    elif isinstance(current, ScriptFunction):
+        if isinstance(f, ScriptFunction):
+            for cb, overload in zip(f.cbs, f.signature.overloads):
+                current.add_overload(overload, cb)
+        else:
+            current.overload(auto=True)(f)
+        return current
+    elif isinstance(f, ScriptFunction):
+        f.overload(auto=True, priority=0)(current)
+        script.SCRIPT_FUNCTION_TABLE[name] = f
+        return f
+    else:
+        x = ScriptFunction()
+        x.overload(auto=True)(current)
+        x.overload(auto=True)(f)
+        script.SCRIPT_FUNCTION_TABLE[name] = x
+        return x
+
 def remove_function(name:str, f:Callable[[ScriptContext], Any]|None=None):
     if f is None:
         return script.SCRIPT_FUNCTION_TABLE.pop(name, None)
-    elif script.SCRIPT_FUNCTION_TABLE.get(name,None) is f:
-        del script.SCRIPT_FUNCTION_TABLE[name]
+    else:
+        x = script.SCRIPT_FUNCTION_TABLE.get(name,None)
+        if x is f:
+            del script.SCRIPT_FUNCTION_TABLE[name]
+        elif isinstance(x, ScriptFunction):
+            if isinstance(f, ScriptFunction):
+                i = 0
+                while i < len(x.cbs):
+                    cb = x.cbs[i]
+                    j = 0
+                    deleted = False
+                    while j < len(f.cbs):
+                        jcb = f.cbs[j]
+                        if cb is jcb:
+                            if not deleted:
+                                deleted = True
+                            del f.cbs[j]
+                            del f.signature.overloads[j]
+                        else:
+                            j += 1
+                    if deleted:
+                        del x.cbs[i]
+                        del x.signature.overloads[i]
+                    else:
+                        i += 1
+            else:
+                i = 0
+                while i < len(x.cbs):
+                    cb = x.cbs[i]
+                    if cb is f:
+                        del x.cbs[i]
+                        del x.signature.overloads[i]
+                    else:
+                        i += 1
+            if not x.cbs:
+                del script.SCRIPT_FUNCTION_TABLE[name]
+        elif isinstance(f, ScriptFunction):
+            if len(f.cbs) == 1 and f.cbs[0] is x:
+                del script.SCRIPT_FUNCTION_TABLE[name]
+            else:
+                return None
+        else:
+            return None
         return f
 
 class ScriptRunner:
