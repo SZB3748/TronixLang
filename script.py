@@ -230,7 +230,6 @@ class ScriptNameValuePair:
         self.name = name
         self.value = value
 
-
 Namespace = dict[str, ScriptVariable]
 
 class ns_stack:
@@ -244,6 +243,12 @@ class ns_stack:
             if name in node.ns:
                 return node.ns
             node = node.prev
+    
+    def pop_name(self, name:str, default=None):
+        ns = self.find_name(name)
+        if ns is None:
+            return default
+        return ns.pop(name).get()
 
 class ScriptContext:
     def __init__(self, stack:ns_stack, params:list[ScriptVariable], script:"Script"):

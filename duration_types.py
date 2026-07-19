@@ -43,6 +43,12 @@ class _duration:
 
     def __bool__(self):
         return bool(self.x)
+    
+    def __int__(self):
+        return int(self.x)
+    
+    def __float__(self):
+        return float(self.x)
 
     def __lt__(self, other):
         rhs = self._prep_rhs_operand(other)
@@ -241,27 +247,27 @@ class _milliseconds_duration(_duration):
     POWER = -3
 
 class _seconds_duration(_duration):
-    UNIT = "s"
+    UNIT = "sec"
     FACTOR = 1
     POWER = 1
 
 class _minutes_duration(_duration):
-    UNIT = "m"
+    UNIT = "min"
     FACTOR = 60
     POWER = 1
 
 class _hours_duration(_duration):
-    UNIT = "h"
+    UNIT = "hr"
     FACTOR = 3600
     POWER = 1
 
 class _days_duration(_duration):
-    UNIT = "d"
+    UNIT = "day"
     FACTOR = 86400
     POWER = 1
 
 class _weeks_duration(_duration):
-    UNIT = "w"
+    UNIT = "week"
     FACTOR = 604800
     POWER = 1
 
@@ -480,6 +486,12 @@ class _complex_duration:
 
     def __bool__(self):
         return any(self.iter_durations())
+    
+    def __int__(self):
+        return int(self.as_seconds().x)
+    
+    def __float__(self):
+        return float(self.as_seconds().x)
 
     def __lt__(self, other):
         if isinstance(other, _complex_duration):
@@ -575,7 +587,7 @@ class _complex_duration:
         elif isinstance(other, _complex_duration):
             return type(self)(secs=self.as_seconds()*other.as_seconds()).simplify()
         elif isinstance(other, (int, float)):
-            return type(self)(*(d.x * other for d in self.iter_durations()))
+            return type(self)(*(d.x * other for d in self.iter_durations())).simplify()
         else:
             return NotImplemented
 
@@ -585,7 +597,7 @@ class _complex_duration:
         elif isinstance(other, _complex_duration):
             return type(self)(secs=self.as_seconds()/other.as_seconds()).simplify()
         elif isinstance(other, (int, float)):
-            return type(self)(*(d.x / other for d in self.iter_durations()))
+            return type(self)(*(d.x / other for d in self.iter_durations())).simplify()
         else:
             return NotImplemented
 
@@ -595,7 +607,7 @@ class _complex_duration:
         elif isinstance(other, _complex_duration):
             return type(self)(secs=self.as_seconds()//other.as_seconds()).simplify()
         elif isinstance(other, (int, float)):
-            return type(self)(*(d.x // other for d in self.iter_durations()))
+            return type(self)(*(d.x // other for d in self.iter_durations())).simplify()
         else:
             return NotImplemented
     
@@ -605,7 +617,7 @@ class _complex_duration:
         elif isinstance(other, _complex_duration):
             return type(self)(secs=self.as_seconds()%other.as_seconds()).simplify()
         elif isinstance(other, (int, float)):
-            return type(self)(*(d.x % other for d in self.iter_durations()))
+            return type(self)(*(d.x % other for d in self.iter_durations())).simplify()
         else:
             return NotImplemented
 
@@ -622,10 +634,10 @@ class _complex_duration:
         return self.__mul__(other)
 
     def __rtruediv__(self, other):
-        return type(self)(*(other/d.x if d.x else 0 for d in self.iter_durations()))
+        return type(self)(*(other/d.x if d.x else 0 for d in self.iter_durations())).simplify()
 
     def __rfloordiv__(self, other):
-        return type(self)(*(other//d.x if d.x else 0 for d in self.iter_durations()))
+        return type(self)(*(other//d.x if d.x else 0 for d in self.iter_durations())).simplify()
 
     def __rmod__(self, other):
         return other % self.as_seconds().x

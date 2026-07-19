@@ -1,14 +1,14 @@
-from . import exceptions, json_proxy, script, utils
+from . import exceptions, duration_types as durtypes, json_proxy, number_units as numunits, script, utils
 from .script import *
 from .utils import ScriptFunction
-from .duration_types import *
 
 import asyncio
 import json
+import math
 import mimetypes
 import string
 import sys
-from typing import BinaryIO, IO
+from typing import BinaryIO, IO, Iterable
 import uuid
 
 _TypeTypeAttrs = utils.ScriptAttributeHandler[type,Any](no_subscripting=True)
@@ -292,14 +292,189 @@ class _MapType(ScriptDataType[dict]):
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({", ".join((k:=wrap_python_value(kx)).type.repr(k).inner + ": " + (v:=wrap_python_value(vx)).type.repr(v).inner for kx, vx in value.inner.items())})")
 
-class _rolist_dummy(list):
-    pass
+class _rolist_wrapper[T](list[T]):
+    def __init__(self, l:list[T]):
+        self.__l = l
 
-class _rodict_dummy(dict):
-    pass
+    def append(self, object:T):
+        return self.__l.append(object)
+    
+    def extend(self, iterable:Iterable[T]):
+        return self.__l.extend(iterable)
+    
+    def insert(self, index:int, object:T):
+        return self.__l.insert(index, object)
+    
+    def remove(self, value:T):
+        return self.__l.remove(value)
+    
+    def pop(self, index:int=-1):
+        return self.__l.pop(index)
+    
+    def clear(self):
+        return self.__l.clear()
+    
+    def index(self, value:T, start:int=0, stop:int=sys.maxsize):
+        return self.__l.index(value, start, stop)
+    
+    def count(self, value:T):
+        return self.__l.count(value)
+    
+    def sort(self, *, key=None, reverse=False):
+        return self.__l.sort(key=key, reverse=reverse)
+    
+    def reverse(self):
+        return self.__l.reverse()
+    
+    def copy(self):
+        return self.__l.copy()
+    
+    def __len__(self):
+        return self.__l.__len__()
+    
+    def __getitem__(self, s:int):
+        return self.__l.__getitem__(s)
+    
+    def __setitem__(self, key:int, value:T):
+        return self.__l.__setitem__(key, value)
+    
+    def __delitem__(self, key:int):
+        return self.__l.__delitem__(key)
+    
+    def __contains__(self, key:T):
+        return self.__l.__contains__(key)
+    
+    def __iter__(self):
+        return self.__l.__iter__()
+    
+    def __reversed__(self):
+        return self.__l.__reversed__()
+    
+    def __add__(self, value):
+        return self.__l.__add__(value)
+    
+    def __mul__(self, value):
+        return self.__l.__mul__(value)
+    
+    def __rmul__(self, value):
+        return self.__l.__rmul__(value)
+    
+    def __iadd__(self, value):
+        return self.__l.__iadd__(value)
+    
+    def __imul__(self, value):
+        return self.__l.__imul__(value)
+    
+    def __repr__(self):
+        return self.__l.__repr__()
+    
+    def __str__(self):
+        return self.__l.__str__()
+    
+    def __eq__(self, value):
+        return self.__l.__eq__(value)
+    
+    def __ne__(self, value):
+        return self.__l.__ne__(value)
+
+    def __lt__(self, value):
+        return self.__l.__lt__(value)
+    
+    def __gt__(self, value):
+        return self.__l.__gt__(value)
+    
+    def __le__(self, value):
+        return self.__l.__le__(value)
+    
+    def __ge__(self, value):
+        return self.__l.__ge__(value)
+
+_RODICT_DEFAULT_MISSING = object()
+
+class _rodict_wrapper[K,V](dict[K,V]):
+    def __init__(self, d:dict[K,V]):
+        self.__d = d
+
+    def clear(self):
+        return self.__d.clear()
+    
+    def copy(self):
+        return self.__d.copy()
+    
+    def get(self, key:K, default:V|None=None):
+        return self.__d.get(key, default)
+    
+    def items(self):
+        return self.__d.items()
+    
+    def keys(self):
+        return self.__d.keys()
+    
+    def pop(self, key:K, default:V=_RODICT_DEFAULT_MISSING):
+        if default is _RODICT_DEFAULT_MISSING:
+            return self.__d.pop(key)
+        else:
+            return self.__d.pop(key, default)
+    
+    def popitem(self):
+        return self.__d.popitem()
+    
+    def setdefault(self, key:K, default:V=None):
+        return self.__d.setdefault(key, default)
+
+    def update(self, *args, **kwargs):
+        return self.__d.update(*args, **kwargs)
+    
+    def values(self):
+        return self.__d.values()
+    
+    def __getitem__(self, key:K):
+        return self.__d.__getitem__(key)
+    
+    def __setitem__(self, key:K, value:V):
+        return self.__d.__setitem__(key, value)
+    
+    def __delitem__(self, key:K):
+        return self.__d.__delitem__(key)
+    
+    def __missing__(self, key:K):
+        return self.__d.__missing__(key)
+    
+    def __contains__(self, key:K):
+        return self.__d.__contains__(key)
+    
+    def __len__(self):
+        return self.__d.__len__()
+    
+    def __iter__(self):
+        return self.__d.__iter__()
+    
+    def __reversed__(self):
+        return self.__d.__reversed__()
+    
+    def __repr__(self):
+        return self.__d.__repr__()
+    
+    def __str__(self):
+        return self.__d.__str__()
+    
+    def __eq__(self, value):
+        return self.__d.__eq__(value)
+    
+    def __ne__(self, value):
+        return self.__d.__ne__(value)
+    
+    def __ior__(self, value):
+        return self.__d.__ior__(value)
+    
+    def __or__(self, value):
+        return self.__d.__or__(value)
+    
+    def __ror__(self, value):
+        return self.__d.__ror__(value)
 
 
-_ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_dummy,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
+_ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_wrapper,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
 @_ListReadonlyTypeAttrs.enforce_child_attrs()
 @_ListReadonlyTypeAttrs.attach
 class _ListReadonlyType(_ListType):
@@ -307,7 +482,7 @@ class _ListReadonlyType(_ListType):
     attrs = _ListReadonlyTypeAttrs
     attrs.wildcard.noset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).nodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
 
-_MapReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rodict_dummy,Any](_MapTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
+_MapReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rodict_wrapper,Any](_MapTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
 @_MapReadonlyTypeAttrs.enforce_child_attrs()
 @_MapReadonlyTypeAttrs.attach
 class _MapReadonlyType(_MapType):
@@ -513,7 +688,7 @@ class _FileType(script.ScriptDataType[_file_wrapper]):
     attrs.entry("mode").readonly(utils.SimpleGetAttribute())
     attrs.entry("fileno").readonly(utils.MethodGetAttribute())
 
-class _DurationBaseType[T:_duration](script.ScriptDataType[T]):
+class _DurationBaseType[T:durtypes._duration](script.ScriptDataType[T]):
 
     construct = f_construct = utils.ScriptFunction()
 
@@ -527,43 +702,43 @@ class _DurationBaseType[T:_duration](script.ScriptDataType[T]):
         return self.inner(x)
     
 
-class _NanoSecondsType(_DurationBaseType[_nanoseconds_duration]):
+class _NanoSecondsType(_DurationBaseType[durtypes._nanoseconds_duration]):
     pass
-class _MicroSecondsType(_DurationBaseType[_microseconds_duration]):
+class _MicroSecondsType(_DurationBaseType[durtypes._microseconds_duration]):
     pass
-class _MilliSecondsType(_DurationBaseType[_milliseconds_duration]):
+class _MilliSecondsType(_DurationBaseType[durtypes._milliseconds_duration]):
     pass
-class _SecondsType(_DurationBaseType[_seconds_duration]):
+class _SecondsType(_DurationBaseType[durtypes._seconds_duration]):
     pass
-class _MinutesType(_DurationBaseType[_minutes_duration]):
+class _MinutesType(_DurationBaseType[durtypes._minutes_duration]):
     pass
-class _HoursType(_DurationBaseType[_hours_duration]):
+class _HoursType(_DurationBaseType[durtypes._hours_duration]):
     pass
-class _DaysType(_DurationBaseType[_days_duration]):
+class _DaysType(_DurationBaseType[durtypes._days_duration]):
     pass
-class _WeeksType(_DurationBaseType[_weeks_duration]):
+class _WeeksType(_DurationBaseType[durtypes._weeks_duration]):
     pass
 
 
 def _complex_duration_setter(d_name:str):
-    def setter(o:ScriptValue[_complex_duration], n:str, v:ScriptVariable[int|float|_duration|_complex_duration]):
-        d:_duration = getattr(o, d_name)
+    def setter(o:ScriptValue[durtypes._complex_duration], n:str, v:ScriptVariable[int|float|durtypes._duration|durtypes._complex_duration]):
+        d:durtypes._duration = getattr(o, d_name)
         x = v.get().inner
         if isinstance(x, (int, float)):
             d.x = x
-        elif isinstance(x, _duration):
+        elif isinstance(x, durtypes._duration):
             d.x = x.x
         else:
             d.x = x._as_duration(type(d)).x
         o.inner.simplify()
         return script.wrap_python_value(d._copy())
-    return utils.TypedSetter([int, float, _duration, _complex_duration], setter)
+    return utils.TypedSetter([int, float, durtypes._duration, durtypes._complex_duration], setter)
 
 
-_ComplexDurationTypeAttrs = utils.ScriptAttributeHandler[_complex_duration, Any]()
+_ComplexDurationTypeAttrs = utils.ScriptAttributeHandler[durtypes._complex_duration, Any]()
 _ComplexDurationTypeAttrs.enforce_child_attrs()
 _ComplexDurationTypeAttrs.attach
-class _ComplexDurationType(script.ScriptDataType[_complex_duration]):
+class _ComplexDurationType(script.ScriptDataType[durtypes._complex_duration]):
 
     def repr(self, value):
         return script.ScriptValue(String, repr(value.inner))
@@ -594,6 +769,24 @@ class _ComplexDurationType(script.ScriptDataType[_complex_duration]):
     attrs.entry("as_nanoseconds").readonly(utils.MethodGetAttribute())
 
 
+class _PercentType(script.ScriptDataType[numunits.percent]):
+    f_construct = construct = utils.ScriptFunction()
+
+    def repr(self, value):
+        return script._convert_script_value(repr(value.inner))
+
+class _DegreesType(script.ScriptDataType[numunits.degrees]):
+    f_construct = construct = utils.ScriptFunction()
+
+    def repr(self, value):
+        return script._convert_script_value(repr(value.inner))
+
+class _RadiansType(script.ScriptDataType[numunits.radians]):
+    f_construct = construct = utils.ScriptFunction()
+
+    def repr(self, value):
+        return script._convert_script_value(repr(value.inner))
+
 AnyType = BASE_TYPE
 Type = _TypeType("type", type, BASE_TYPE)
 Float = _FloatType("float", float, BASE_TYPE)
@@ -605,69 +798,61 @@ NamePair = _NameValuePairType("namepair", ScriptNameValuePair, BASE_TYPE)
 Pair = _PairType("pair", _pair, BASE_TYPE)
 List = _ListType("list", list, BASE_TYPE)
 Map = _MapType("map", dict, BASE_TYPE)
-List_readonly = _ListReadonlyType("_list_readonly", _rolist_dummy, List)
-Map_readonly = _MapReadonlyType("_map_readonly", _rodict_dummy, Map)
+List_readonly = _ListReadonlyType("_list_readonly", _rolist_wrapper, List)
+Map_readonly = _MapReadonlyType("_map_readonly", _rodict_wrapper, Map)
 UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
 JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TYPE)
 JsonNode = _JsonProxyNodeType("JsonNode", json_proxy.JsonProxyNode, BASE_TYPE)
 File = _FileType("File", _file_wrapper, BASE_TYPE)
-Duration = _DurationBaseType("Duration", _duration, BASE_TYPE)
-Nanoseconds = _NanoSecondsType("nanoseconds", _nanoseconds_duration, Duration)
-Microseconds = _MicroSecondsType("microseconds", _microseconds_duration, Duration)
-Milliseconds = _MilliSecondsType("milliseconds", _milliseconds_duration, Duration)
-Seconds = _SecondsType("seconds", _seconds_duration, Duration)
-Minutes = _MinutesType("minutes", _minutes_duration, Duration)
-Hours = _HoursType("hours", _hours_duration, Duration)
-Weeks = _WeeksType("weeks", _weeks_duration, Duration)
-Days = _DaysType("days", _days_duration, Duration)
-ComplexDuration = _ComplexDurationType("ComplexDuration", _complex_duration, BASE_TYPE)
+Duration = _DurationBaseType("Duration", durtypes._duration, BASE_TYPE)
+Nanoseconds = _NanoSecondsType("nanoseconds", durtypes._nanoseconds_duration, Duration)
+Microseconds = _MicroSecondsType("microseconds", durtypes._microseconds_duration, Duration)
+Milliseconds = _MilliSecondsType("milliseconds", durtypes._milliseconds_duration, Duration)
+Seconds = _SecondsType("seconds", durtypes._seconds_duration, Duration)
+Minutes = _MinutesType("minutes", durtypes._minutes_duration, Duration)
+Hours = _HoursType("hours", durtypes._hours_duration, Duration)
+Weeks = _WeeksType("weeks", durtypes._weeks_duration, Duration)
+Days = _DaysType("days", durtypes._days_duration, Duration)
+ComplexDuration = _ComplexDurationType("ComplexDuration", durtypes._complex_duration, BASE_TYPE)
+Percent = _PercentType("percent", numunits.percent, BASE_TYPE)
+Degrees = _DegreesType("degrees", numunits.degrees, BASE_TYPE)
+Radians = _RadiansType("radians", numunits.radians, BASE_TYPE)
 
 _StringTypeAttrs.wildcard.itemgetter(BASE_TYPE.getitem).itemsetter(BASE_TYPE.setitem).itemdeleter(BASE_TYPE.delitem)
 _ListTypeAttrs.wildcard.itemgetter(List.getitem).itemsetter(List.setitem).itemdeleter(List.delitem)
 _MapTypeAttrs.wildcard.itemgetter(BASE_TYPE.getitem).itemsetter(BASE_TYPE.setitem).itemdeleter(BASE_TYPE.delitem)
 _JsonProxyNodeTypeAttrs.wildcard.reverse_attach(JsonNode)
 
-null = ScriptValue(NullType, None)
-true = ScriptValue(Bool, True)
-false = ScriptValue(Bool, False)
+null = script.ScriptValue(NullType, None)
+true = script.ScriptValue(Bool, True)
+false = script.ScriptValue(Bool, False)
+PI = script.ScriptValue(Float, math.pi)
 
-_builtin_types:list[ScriptDataType] = [Type, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID, File, Nanoseconds, Microseconds, Milliseconds, Seconds, Minutes, Hours, Weeks, Days]
+_builtin_types:list[ScriptDataType] = [
+    Type, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID, File,
+    Nanoseconds, Microseconds, Milliseconds, Seconds, Minutes, Hours, Weeks, Days,
+    Percent, Degrees, Radians
+]
 
 @_TypeType.f_construct.overload(("value", [AnyType, NamePair]))
 def type_construct(self, value:ScriptVariable):
-        return script.ScriptValue(self, value.type().inner)
+    return script.ScriptValue(self, value.type().inner)
 
 @_FloatType.f_construct.overload(("value", Float, 0.0))
 def float_construct_identity(self, value:ScriptVariable[float]):
     return script.ScriptValue(self, value.get().inner)
 
-@_FloatType.f_construct.overload(("value", [Integer,Bool,String]))
-def float_construct(self, value:ScriptVariable[int|bool|str]):
+@_FloatType.f_construct.overload(("value", [Integer,Bool,String,Percent,Degrees,Radians,Duration,ComplexDuration]))
+def float_construct(self, value:ScriptVariable[int|bool|str|numunits.percent|numunits.degrees|numunits.radians|durtypes._duration|durtypes._complex_duration]):
     return script.ScriptValue(self, float(value.get().inner))
-
-@_FloatType.f_construct.overload(("value", Duration))
-def float_construct_duration(self, value:ScriptVariable[_duration]):
-    return script.ScriptValue(self, float(value.get().inner.x))
-
-@_FloatType.f_construct.overload(("value", ComplexDuration))
-def float_construct_cduration(self, value:ScriptVariable[_complex_duration]):
-    return script.ScriptValue(self, float(value.get().inner.as_seconds().x))
 
 @_IntegerType.f_construct.overload(("value", Integer, 0))
 def integer_construct_identity(self, value:ScriptVariable[int]):
     return script.ScriptValue(self, value.get().inner)
 
-@_IntegerType.f_construct.overload(("value", [Bool, String, Float]))
-def integer_construct_convert(self, value:ScriptVariable[bool|str|float]):
+@_IntegerType.f_construct.overload(("value", [Bool,String,Float,Percent,Degrees,Radians,Duration,ComplexDuration]))
+def integer_construct_convert(self, value:ScriptVariable[bool|str|float|numunits.percent|numunits.degrees|numunits.radians|durtypes._duration|durtypes._complex_duration]):
     return script.ScriptValue(self, int(value.get().inner))
-
-@_IntegerType.f_construct.overload(("value", Duration))
-def integer_construct_duration(self, value:ScriptVariable[_duration]):
-    return script.ScriptValue(self, int(value.get().inner.x))
-
-@_IntegerType.f_construct.overload(("value", ComplexDuration))
-def integer_construct_cduration(self, value:ScriptVariable[_complex_duration]):
-    return script.ScriptValue(self, int(value.get().inner.as_seconds().x))
 
 @_IntegerType.f_construct.overload(("value", String), ("base", Integer))
 def integer_construct_convert_base(self, value:ScriptVariable[str], base:ScriptVariable[int]):
@@ -748,18 +933,71 @@ def File_construct(self, path:ScriptVariable[str], mode:ScriptVariable[str]):
     return script.ScriptValue(self, _file_wrapper(open(path.get().inner, resolve_file_mode(mode)+"b")))
 
 @_DurationBaseType.f_construct.overload(("value", [Integer, Float, String, Bool], 0.0))
-def DurationBase_construct_number(self:ScriptDataType[_duration], value:ScriptVariable[int|float|str|bool]):
+def DurationBase_construct_number(self:ScriptDataType[durtypes._duration], value:ScriptVariable[int|float|str|bool]):
     return script.ScriptValue(self, self.inner(float(value.get().inner)))
 
 @_DurationBaseType.f_construct.overload(("value", [Duration]))
-def DurationBase_construct_duration(self:ScriptDataType[_duration], value:ScriptVariable[_duration]):
+def DurationBase_construct_duration(self:ScriptDataType[durtypes._duration], value:ScriptVariable[durtypes._duration]):
     d = value.get().inner
-    x = d.x * _unitspace_convert(self.inner.FACTOR, self.inner.POWER, d.FACTOR, d.POWER)
+    x = d.x * durtypes._unitspace_convert(self.inner.FACTOR, self.inner.POWER, d.FACTOR, d.POWER)
     return script.ScriptValue(self, self.inner(x))
 
 @_DurationBaseType.f_construct.overload(("value", [ComplexDuration]))
-def DurationBase_construct_complex(self:ScriptDataType[_duration], value:ScriptVariable[_complex_duration]):
+def DurationBase_construct_complex(self:ScriptDataType[durtypes._duration], value:ScriptVariable[durtypes._complex_duration]):
     return script.ScriptValue(self, value.get().inner._as_duration(self.inner))
+
+@_PercentType.f_construct.overload(("value", [Integer, Float, String]))
+def percent_construct(self:ScriptDataType[numunits.percent], value:ScriptVariable[float|int]):
+    return script.ScriptValue(self, numunits.percent(float(value.get().inner) / 100))
+
+@_PercentType.f_construct.overload(("value", Percent))
+def percent_construct_identity(self:ScriptDataType[numunits.percent], value:ScriptVariable[numunits.percent]):
+    return script.ScriptValue(self, numunits.percent(value.get().inner.value))
+
+@_PercentType.f_construct.overload(("value", Bool))
+def percent_construct_bool(self:ScriptDataType[numunits.percent], value:ScriptVariable[bool]):
+    return script.ScriptValue(self, numunits.percent(1.0 if value.get().inner else 0.0))
+
+@_PercentType.f_construct.overload(("value", Degrees))
+def percent_construct_degrees(self:ScriptDataType[numunits.percent], value:ScriptVariable[numunits.degrees]):
+    return script.ScriptValue(self, numunits.percent(value.get().inner.value / 360))
+
+@_PercentType.f_construct.overload(("value", Radians))
+def percent_construct_degrees(self:ScriptDataType[numunits.percent], value:ScriptVariable[numunits.radians]):
+    return script.ScriptValue(self, numunits.percent(value.get().inner.value / math.tau)) #tau == 2pi
+
+@_DegreesType.f_construct.overload(("value", [Integer, Float, String, Bool]))
+def degrees_construct(self:ScriptDataType[numunits.degrees], value:ScriptVariable[int|float|str]):
+    return script.ScriptValue(Degrees, numunits.degrees(float(value.get().inner)))
+
+@_DegreesType.f_construct.overload(("value", Degrees))
+def degrees_construct_identity(self:ScriptDataType[numunits.degrees], value:ScriptVariable[numunits.degrees]):
+    return script.ScriptValue(Degrees, numunits.degrees(value.get().inner.value))
+
+@_DegreesType.f_construct.overload(("value", Radians))
+def degrees_construct_radians(self:ScriptDataType[numunits.degrees], value:ScriptVariable[numunits.radians]):
+    return script.ScriptValue(Degrees, numunits.degrees(math.degrees(value.get().inner.value)))
+
+@_DegreesType.f_construct.overload(("value", Percent))
+def radians_construct_percent(self:ScriptDataType[numunits.degrees], value:ScriptVariable[numunits.percent]):
+    return script.ScriptValue(Degrees, numunits.degrees(value.get().inner.value * 360))
+
+@_RadiansType.f_construct.overload(("value", [Integer, Float, String, Bool]))
+def radians_construct(self:ScriptDataType[numunits.radians], value:ScriptVariable[int|float|str]):
+    return script.ScriptValue(Radians, numunits.radians(float(value.get().inner)))
+
+@_RadiansType.f_construct.overload(("value", Radians))
+def radians_construct_identity(self:ScriptDataType[numunits.radians], value:ScriptVariable[numunits.radians]):
+    return script.ScriptValue(Radians, numunits.radians(value.get().inner.value))
+
+@_RadiansType.f_construct.overload(("value", Degrees))
+def radians_construct_degrees(self:ScriptDataType[numunits.radians], value:ScriptVariable[numunits.degrees]):
+    return script.ScriptValue(Radians, numunits.radians(math.radians(value.get().inner.value)))
+
+@_RadiansType.f_construct.overload(("value", Percent))
+def radians_construct_percent(self:ScriptDataType[numunits.radians], value:ScriptVariable[numunits.percent]):
+    return script.ScriptValue(Radians, numunits.radians(value.get().inner.value * math.tau))
+
 
 f_isinstance = ScriptFunction()
 f_issubtype = ScriptFunction()
@@ -777,6 +1015,8 @@ f_close = ScriptFunction()
 f_append = ScriptFunction()
 f_find = ScriptFunction()
 f_contains = ScriptFunction()
+f_delete = ScriptFunction()
+f_delete_attribute = ScriptFunction()
 
 @f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
@@ -799,12 +1039,15 @@ def function_has(ctx:ScriptContext, name:ScriptVariable[str]):
     return ScriptValue(Bool, ctx.stack.find_name(name.get().inner) is not None)
 
 @f_has.overload(dict(name="names", dtypes=[String], pack=True), pass_ctx=True)
-def function_has_plural(ctx:ScriptContext, *names:ScriptVariable[str]):
+def function_has_plural_pack(ctx:ScriptContext, *names:ScriptVariable[str]):
     return ScriptValue(List, [ctx.stack.find_name(name.get().inner) is not None for name in names])
 
 @f_has.overload(("names", List), pass_ctx=True)
-def function_has_plural(ctx:ScriptContext, *names:ScriptVariable[str]):
-    return ScriptValue(List, [ctx.stack.find_name(name.get().inner) is not None for name in names])
+def function_has_plural(ctx:ScriptContext, names:ScriptVariable[list]):
+    namelist = names.get().inner
+    if not any(isinstance(s, str) for s in namelist):
+        ... #TODO type must be a list of strings
+    return ScriptValue(List, [ctx.stack.find_name(name) is not None for name in namelist])
 
 @f_has.overload(("node", [JsonNode, JsonProxyRoot]), ("name", String))
 def function_has(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonProxyRoot], name:ScriptVariable[str]):
@@ -965,6 +1208,8 @@ def close_file(file:ScriptVariable[_file_wrapper]):
 @f_append.overload(("target", List), ("value", [AnyType, NamePair]))
 def list_append_value(target:ScriptVariable[list], value:ScriptVariable):
     v = target.get()
+    if v.type.issubtype(List_readonly):
+        ... #TODO error list is read only
     v.inner.append(value.get().inner)
     return v
 
@@ -1033,7 +1278,24 @@ def map_contains(target:ScriptVariable[dict], value:ScriptVariable):
         return true
     else:
         return false
+    
+@f_delete.overload(("name", String), pass_ctx=True)
+def delete_name(ctx:ScriptContext, name:ScriptVariable[str]):
+    n = name.get().inner
+    v = ctx.stack.pop_name(n)
+    if v is None:
+        raise exceptions.TMissingName(f"Could not find name to delete: {repr(n)}")
+    return v
 
+@f_delete.overload(("value", [AnyType, NamePair]), ("key_or_index", [AnyType, NamePair]))
+def delete_item(value:ScriptVariable, key_or_index:ScriptVariable):
+    x = value.get()
+    return x.type.delitem(x, key_or_index)
+
+@f_delete_attribute.overload(("value", [AnyType, NamePair]), ("name", String))
+def delete_attribute(value:ScriptVariable, name:ScriptVariable[str]):
+    x = value.get()
+    return x.type.delattr(x, name.get().inner)
 
 def activate():
     if not mimetypes.inited:
@@ -1066,6 +1328,8 @@ def activate():
     utils.merge_function("append", f_append)
     utils.merge_function("find", f_find)
     utils.merge_function("contains", f_contains)
+    utils.merge_function("delete", f_delete)
+    utils.merge_function("delete_attribute", f_delete_attribute)
 
 def deactivate():
     utils.remove_type(NullType)
@@ -1096,3 +1360,5 @@ def deactivate():
     utils.remove_function("append", f_append)
     utils.remove_function("find", f_find)
     utils.remove_function("contains", f_contains)
+    utils.remove_function("delete", f_delete)
+    utils.remove_function("delete_attribute", f_delete_attribute)
