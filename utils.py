@@ -439,10 +439,10 @@ class ScriptAttributeHandler[T,K]:
         def getattr(_, object:ScriptValue[T], name:str):
             p = self
             while p is not None:
-                attr = self.attributes.get(name, self.wildcard)
+                attr = p.attributes.get(name, p.wildcard)
                 if not (attr is None or attr._get is None):
                     return attr._get(object, name)
-                p = self.parent
+                p = p.parent
             raise AttributeError(repr(name))
         return getattr
     
@@ -451,10 +451,10 @@ class ScriptAttributeHandler[T,K]:
             p = self
             keyx = key.get().inner
             while p is not None:
-                attr = self.attributes.get(keyx, self.wildcard)
+                attr = p.attributes.get(keyx, p.wildcard)
                 if not (attr is None or attr._getitem is None):
                     return attr._getitem(object, key)
-                p = self.parent
+                p = p.parent
             raise LookupError(key.type().repr(key.get()).inner)
         return getitem
 
@@ -462,11 +462,11 @@ class ScriptAttributeHandler[T,K]:
         def setattr(_, object:ScriptValue[T], name:str, value:ScriptVariable):
             p = self
             while p is not None:
-                attr = self.attributes.get(name, self.wildcard)
+                attr = p.attributes.get(name, p.wildcard)
                 if attr is not None:
                     if attr._set is not None:
                         return attr._set(object, name, value)
-                p = self.parent
+                p = p.parent
             raise AttributeError(repr(name))
         return setattr
     
@@ -475,10 +475,10 @@ class ScriptAttributeHandler[T,K]:
             p = self
             keyx = key.get().inner
             while p is not None:
-                attr = self.attributes.get(keyx, self.wildcard)
+                attr = p.attributes.get(keyx, p.wildcard)
                 if not (attr is None or attr._setitem is None):
                     return attr._setitem(object, key, value)
-                p = self.parent
+                p = p.parent
             raise LookupError(key.type().repr(key.get()).inner)
         return setitem
     
@@ -486,11 +486,11 @@ class ScriptAttributeHandler[T,K]:
         def delattr(_, object:ScriptValue[T], name:str):
             p = self
             while p is not None:
-                attr = self.attributes.get(name, self.wildcard)
+                attr = p.attributes.get(name, p.wildcard)
                 if attr is not None:
                     if attr._del is not None:
                         return attr._del(object, name)
-                p = self.parent
+                p = p.parent
             raise AttributeError(repr(name))
         return delattr
     
@@ -499,10 +499,10 @@ class ScriptAttributeHandler[T,K]:
             p = self
             keyx = key.get().inner
             while p is not None:
-                attr = self.attributes.get(keyx, self.wildcard)
+                attr = p.attributes.get(keyx, p.wildcard)
                 if not (attr is None or attr._delitem is None):
                     return attr._delitem(object, key)
-                p = self.parent
+                p = p.parent
             raise LookupError(key.type().repr(key.get()).inner)
         return getitem
     
