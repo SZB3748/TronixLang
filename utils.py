@@ -619,6 +619,7 @@ class ScriptFunctionSignature:
             pi = 0
             ai = 0
             all_args_match = True
+            positional_parameters_encountered = 0
             rtv_args = []
             rtv_kwargs = {}
 
@@ -650,13 +651,17 @@ class ScriptFunctionSignature:
                     else:
                         k = None
                     if not v.type.issubtype(*ts):
-                        if not _p.pack:
+                        if _p.pack:
+                            positional_parameters_encountered += 1
+                        else:
                             all_args_match = False
                         break
                     ai += 1
 
                     if k is None: #positional
                         rtv_args.append(arg)
+                        if not p.pack:
+                            positional_parameters_encountered += 1
                     else: #keyword
                         rtv_kwargs[k] = ScriptVariable(v)
                 if not all_args_match:
@@ -667,7 +672,7 @@ class ScriptFunctionSignature:
             if pi >= len(overload.params) and ai < len(args):
                 continue #too many arguments
             if all_args_match:
-                for j in range(len(rtv_args), len(overload.params)):
+                for j in range(positional_parameters_encountered, len(overload.params)):
                     p = overload.params[j]
                     if p.pack:
                         continue
