@@ -611,7 +611,7 @@ class ScriptFunctionSignature:
         self.overloads = overloads
 
     def fit(self, args:list[ScriptVariable])->tuple[int, list[ScriptVariable], dict[str, ScriptVariable]]|tuple[None,None,None]:
-        pair = DATA_TYPE_TABLE[ScriptNameValuePair]
+        npair = DATA_TYPE_TABLE[script.ScriptNameValuePair]
         for i, overload in enumerate(self.overloads):
             l = overload.check()-1
             if len(args) < l:
@@ -626,7 +626,7 @@ class ScriptFunctionSignature:
             while ai < len(args) and pi < len(overload.params):
                 p = overload.params[pi]
                 resolvedts = list(p.resolve_types())
-                takespair = pair in resolvedts
+                takespair = npair in resolvedts
                 while (p.pack or once) and ai < len(args):
                     if once:
                         once = False
@@ -636,7 +636,7 @@ class ScriptFunctionSignature:
 
                     arg = args[ai]
                     v = arg.get()
-                    if v.type is pair and not takespair:
+                    if v.type is npair and not takespair:
                         k:str = v.inner.name
                         for _p in overload.params:
                             if _p.name == k:
@@ -664,10 +664,10 @@ class ScriptFunctionSignature:
                 pi += 1
                 if not once:
                     once = True
-            if pi == len(overload.params) and ai < len(args):
+            if pi >= len(overload.params) and ai < len(args):
                 continue #too many arguments
             if all_args_match:
-                for j in range(pi, len(overload.params)):
+                for j in range(len(rtv_args), len(overload.params)):
                     p = overload.params[j]
                     if p.pack:
                         continue
