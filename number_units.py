@@ -3,6 +3,12 @@ import math
 class percent:
     def __init__(self, value:float=0.0):
         self.value = value
+    
+    def __getstate__(self):
+        return self.value
+
+    def __setstate__(self, v:float):
+        self.value = v
 
     def __repr__(self):
         return f"{self.value*100}%"
@@ -119,6 +125,12 @@ class percent:
 class degrees:
     def __init__(self, value:float=0.0):
         self.value = value
+    
+    def __getstate__(self):
+        return self.value
+
+    def __setstate__(self, v:float):
+        self.value = v
 
     def __repr__(self):
         return f"{self.value}°"
@@ -258,6 +270,12 @@ class degrees:
 class radians:
     def __init__(self, value:float=0.0):
         self.value = value
+    
+    def __getstate__(self):
+        return self.value
+
+    def __setstate__(self, v:float):
+        self.value = v
 
     def __repr__(self):
         return f"{self.value/math.pi}πrad"

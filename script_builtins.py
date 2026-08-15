@@ -473,6 +473,151 @@ class _rodict_wrapper[K,V](dict[K,V]):
     def __ror__(self, value):
         return self.__d.__ror__(value)
 
+_ROLIST_EMPTY = _rolist_wrapper([])
+_RODICT_EMPTY = _rodict_wrapper({})
+
+class ListOf(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "list_of"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, "|,")
+        return cls(*(script.parse_script_type_annotation(part) for part in parts))
+    
+    def __init__(self, *types:script.ScriptDataType|script.ScriptTypeAnnotation|type|str):
+        if not types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
+        self.types = list(types)
+        self._resolved = False
+
+    def _resolve_types(self):
+        if not self._resolved:
+            for i, t in enumerate(self.types):
+                if isinstance(t, str):
+                    self.types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.types[i] = script.wrap_python_type(t)
+            self._resolved = True
+        return self.types
+
+    def __eq__(self, other):
+        if isinstance(other, ListOf):
+            return len(self._resolve_types()) == len(other._resolve_types()) and all(t in other.types for t in self.types)
+        return other == List
+    
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            if not other.type.issubtype(List):
+                return False
+            assert isinstance(other.inner, list)
+            l = other.inner
+        elif not isinstance(other, list):
+            return False
+        else:
+            l = other
+        dts_l = []
+        ann:list[ScriptTypeAnnotation] = []
+        for t in self._resolve_types():
+            if isinstance(t, script.ScriptDataType):
+                dts_l.append(t.inner)
+            else:
+                ann.append(t)
+        dts:tuple[type,...] = tuple(dts_l)
+        for item in l:
+            if not (dts and isinstance(item, dts) or any(a.compare(item) for a in ann)):
+                return False
+        return True
+    
+    def format_data(self):
+        return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+    
+
+class MapOf(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "map_of"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, ",")
+        if len(parts) > 2:
+            ... #TODO error map_of only takes type annotations for key and value
+        return cls(*(script.split_type_annotation_contents(part, "|") for part in parts))
+    
+    def __init__(self, key_types:ScriptDataType|ScriptTypeAnnotation|str|type|list[ScriptDataType|ScriptTypeAnnotation|str|type],
+                 value_types:ScriptDataType|ScriptTypeAnnotation|str|type|list[ScriptDataType|ScriptTypeAnnotation|str|type]|None=None):
+        self.key_types = [key_types] if isinstance(key_types, (script.ScriptDataType, script.ScriptTypeAnnotation, type)) else list(key_types)
+        self.value_types = [script.BASE_TYPE] if value_types is None else [value_types] if isinstance(value_types, (script.ScriptDataType, script.ScriptTypeAnnotation, type)) else list(value_types)
+        self._resolved_keys = False
+        self._resolved_values = False
+        if not self.value_types:
+            self.value_types.append(script.BASE_TYPE)
+        if not self.key_types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations for the map keys")
+
+    def _resolve_keys(self):
+        if not self._resolved_keys:
+            for i, t in enumerate(self.key_types):
+                if isinstance(t, str):
+                    self.key_types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.key_types[i] = script.wrap_python_type(t)
+            self._resolved_keys = True
+        return self.key_types
+
+    def _resolve_values(self):
+        if not self._resolved_values:
+            for i, t in enumerate(self.value_types):
+                if isinstance(t, str):
+                    self.value_types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.value_types[i] = script.wrap_python_type(t)
+            self._resolved_values = True
+        return self.value_types
+
+    def __eq__(self, other):
+        if isinstance(other, MapOf):
+            return (len(self._resolved_keys()) == len(other._resolved_keys()) and all(t in other.key_types for t in self.key_types) and
+                    len(self._resolve_values()) == len(other._resolve_values()) and all(t in other.value_types for t in self.value_types))
+        return other == Map
+    
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            if not other.type.issubtype(Map):
+                return False
+            assert isinstance(other.inner, dict)
+            d = other.inner
+        elif not isinstance(other, dict):
+            return False
+        else:
+            d = other
+        kdts_l = []
+        kann:list[ScriptTypeAnnotation] = []
+        vdts_l = []
+        vann:list[ScriptTypeAnnotation] = []
+        for t in self._resolve_keys():
+            if isinstance(t, script.ScriptDataType):
+                kdts_l.append(t.inner)
+            else:
+                kann.append(t)
+        for t in self._resolve_values():
+            if isinstance(t, script.ScriptDataType):
+                vdts_l.append(t.inner)
+            else:
+                vann.append(t)
+        kdts:tuple[type,...] = tuple(kdts_l)
+        vdts:tuple[type,...] = tuple(vdts_l)
+
+        for key, value in d.items():
+            if not ((kdts and isinstance(key, kdts) or any(a.compare(key) for a in kann)) and (vdts and isinstance(value, vdts) or any(a.compare(value) for a in vann))):
+                return False
+        return True
+    
+    def format_data(self):
+        keystr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self.key_types)
+        valstr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self.value_types)
+        return f"{keystr}, {valstr}"
+    
 
 _ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_wrapper,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
 @_ListReadonlyTypeAttrs.enforce_child_attrs()
@@ -1042,12 +1187,9 @@ def function_has(ctx:ScriptContext, name:ScriptVariable[str]):
 def function_has_plural_pack(ctx:ScriptContext, *names:ScriptVariable[str]):
     return ScriptValue(List, [ctx.stack.find_name(name.get().inner) is not None for name in names])
 
-@f_has.overload(("names", List), pass_ctx=True)
+@f_has.overload(("names", ListOf(String)), pass_ctx=True)
 def function_has_plural(ctx:ScriptContext, names:ScriptVariable[list]):
-    namelist = names.get().inner
-    if not any(isinstance(s, str) for s in namelist):
-        ... #TODO type must be a list of strings
-    return ScriptValue(List, [ctx.stack.find_name(name) is not None for name in namelist])
+    return ScriptValue(List, [ctx.stack.find_name(name) is not None for name in names.get().inner])
 
 @f_has.overload(("node", [JsonNode, JsonProxyRoot]), ("name", String))
 def function_has(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonProxyRoot], name:ScriptVariable[str]):
@@ -1070,14 +1212,14 @@ def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.
     return ScriptValue(List, [name.get().inner in data for name in names])
 
 @f_has.overload(("node", [JsonNode, JsonProxyRoot]), ("names", List))
-def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonProxyRoot], *names:ScriptVariable[str]):
+def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonProxyRoot], names:ScriptVariable[list]):
     if isinstance(node, json_proxy.JsonProxyRoot):
         data, _ = node.get().inner.get_data()
     else:
         data = node.get().inner.resolve()
     if not isinstance(data, dict):
         raise exceptions.TTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
-    return ScriptValue(List, [name.get().inner in data for name in names])
+    return ScriptValue(List, [name in data for name in names])
 
 @f_hasfunc.overload(("name", String))
 def function_hasfunc(name:ScriptVariable[str]):
@@ -1100,6 +1242,17 @@ def function_flush_json_proxy_root(flushable:ScriptVariable[json_proxy.JsonProxy
 @f_wait.overload(("seconds", [Integer, Float]))
 async def function_wait(seconds:ScriptVariable[int|float]):
     await asyncio.sleep(seconds.get().inner)
+
+@f_wait.overload(("duration", Duration))
+async def function_wait_duration(duration:ScriptVariable[durtypes._duration]):
+    d = duration.get().inner
+    seconds = d.x * durtypes._unitspace_convert(durtypes._seconds_duration.FACTOR, durtypes._seconds_duration.POWER, d.FACTOR, d.POWER)
+    await asyncio.sleep(seconds)
+
+@f_wait.overload(("duration", ComplexDuration))
+async def function_wait_complex_duration(duration:ScriptVariable[durtypes._complex_duration]):
+    cd = duration.get().inner
+    await asyncio.sleep(cd.as_seconds().x)
 
 @f_format_json.overload(("value", AnyType), ("serialize", Bool, True))
 def function_format_json(value:ScriptVariable[Any], serialize:ScriptVariable[bool]):

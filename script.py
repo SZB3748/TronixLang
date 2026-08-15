@@ -33,6 +33,23 @@ class ScriptValue[T]:
         self.type = value_type
         self.inner = inner
 
+    def isinstance(self, *dts:"ScriptDataType|ScriptTypeAnnotation"):
+        comp_types = []
+        for dt in dts:
+            if dt == BASE_TYPE:
+                return True
+            elif isinstance(dt, ScriptTypeAnnotation):
+                if dt.compare(self):
+                    return True
+            else:
+                comp_types.append(dt)
+        c = self.type
+        while c is not BASE_TYPE:
+            if c in comp_types:
+                return True
+            c = c.parent
+        return False
+
 class ScriptVariable[T]:
     def __init__(self, value:ScriptValue[T]):
         self.value = value
@@ -46,6 +63,76 @@ class ScriptVariable[T]:
     def assign(self, value:ScriptValue[T]):
         self.value = value
 
+class ScriptTypeAnnotation:
+
+    ANNOTATION_NAME:str = None
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        raise NotImplementedError
+
+    def __init_subclass__(cls):
+        assert not (cls.ANNOTATION_NAME is None or cls.ANNOTATION_NAME in _TYPE_ANNOTATIONS), f"{cls} must define a unique ANNOTATION_NAME"
+        _TYPE_ANNOTATIONS[cls.ANNOTATION_NAME] = cls
+
+    def __eq__(self, other:"ScriptDataType")->bool:
+        raise NotImplementedError
+    
+    def __ne__(self, other):
+        return not (self.__eq__(other))
+    
+    def compare(self, other:"ScriptValue|Any")->bool:
+        raise NotImplementedError
+    
+    def format_data(self)->str:
+        raise NotImplementedError
+
+_TYPE_ANNOTATIONS:dict[str, type[ScriptTypeAnnotation]] = {}
+
+RE_TYPE_ANNOTATION_START = re.compile(f"\\s*(P<name>{PATTERN_NAME})\\s*(?:(P<annotation_start>\\[)|\\s*$)")
+def parse_script_type_annotation(s:str):
+    m = RE_TYPE_ANNOTATION_START.match(s)
+    if m is None:
+        ... #TODO error invalid type annotation
+    name = m["name"]
+    annotation_start = m["annotation_start"]
+    if annotation_start is None:
+        t = name_to_type(name)
+        if t is None:
+            ... #TODO error unknown type
+        return t
+    end = s.find("]")
+    if end == -1 or s[end+1:].isspace():
+        ... #TODO error type annotation not closed properly
+    at = _TYPE_ANNOTATIONS.get(name, None)
+    if at is None:
+        ... #TODO error unknown annotation
+    return at.parse(s[m.endpos:end-1])
+
+def split_type_annotation_contents(s:str, seps:str):
+    contents:list[str] = []
+    start = 0
+    sb_counter = 0
+    for i, c in enumerate(s):
+        c = s[i]
+        if c in seps:
+            if sb_counter > 0:
+                continue
+            contents.append(s[start:i])
+            start = i+1
+        elif c == "[":
+            sb_counter += 1
+        elif c == "]":
+            if sb_counter == 0:
+                ... #TODO error unexpected ]
+            sb_counter -= 1
+    if sb_counter:
+        ... #TODO error unclosed [
+    last = s[start:i]
+    if not last.strip():
+        contents.append(last)
+    return contents
+
 class ScriptDataType[T]:
     """The default datatype containing all the default operation behaviors."""
 
@@ -55,10 +142,10 @@ class ScriptDataType[T]:
         self.parent = parent
         self.__init = False
     
-    def issubtype(self, *dts:"ScriptDataType")->bool:
-        c = self
+    def issubtype(self, *dts:"ScriptDataType|ScriptTypeAnnotation")->bool:
         if BASE_TYPE in dts:
             return True
+        c = self
         while c is not BASE_TYPE:
             if c in dts:
                 return True
@@ -397,7 +484,7 @@ DATA_TYPE_TABLE:dict[type, ScriptDataType] = {
 
 _name_to_datatype:dict[str, ScriptDataType] = {}
 
-def _convert_script_value(value):
+def _convert_script_value[T](value:T):
     t = DATA_TYPE_TABLE.get(type(value), None)
     if t is None:
         return None
@@ -412,18 +499,17 @@ def name_to_type(name:str):
                 return dt
     return t
 
-def wrap_python_value(value):
+def wrap_python_value[T](value:T|ScriptValue[T]):
     if isinstance(value, ScriptValue):
         return value
     v = _convert_script_value(value)
     if v is None:
         t = type(value)
         st = wrap_python_type(t)
-        DATA_TYPE_TABLE[t] = st
-        v = ScriptValue(st, value)
+        v = ScriptValue[T](st, value)
     return v
 
-def wrap_python_type(t:type|ScriptDataType):
+def wrap_python_type(t:type|ScriptDataType, update_table:bool=True):
     if isinstance(t, ScriptDataType):
         return t
     st = DATA_TYPE_TABLE.get(t, None)
@@ -443,13 +529,18 @@ def wrap_python_type(t:type|ScriptDataType):
         else:
             tchain.parent = supt
             break
+
     
     tchain_l = list(st.parent_chain())
     for parent in reversed(tchain_l):
         if parent in new_dts:
             parent.init()
 
-    return st.init()
+    if update_table:
+        DATA_TYPE_TABLE[t] = st.init()
+        return st
+    else:
+        return st.init()
 
 class Script:
 

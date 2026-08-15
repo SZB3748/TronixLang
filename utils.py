@@ -209,6 +209,7 @@ _DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"canno
 
 _DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable (you can't do value[...])", error=exceptions.TNotImplemented)
 _DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign value of type {v.type().name} to {__error_repr_attr_key(n)} {"item" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
+_DEFAULT_DELETE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n: f"cannot delete {f"item of type {n.type().name}" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
 
 def SimpleGetAttribute(name:str|None=None)->AttributeGetter:
     def f(o:ScriptValue, n:str):
@@ -282,18 +283,20 @@ def SimpleDelAttributeAsItem(name:str|None=None, pop:bool=True)->AttributeItemDe
             delattr(o.inner, name or n.get().inner)
     return f
 
-def TypedSetter(ts:type|ScriptDataType|list[type|ScriptDataType], f:AttributeSetter|AttributeItemSetter|None=None, no_access:ScriptAttributeNoAccess|None=None):
+def TypedSetter(ts:type|ScriptDataType|ScriptTypeAnnotation|list[type|ScriptDataType|ScriptTypeAnnotation], f:AttributeSetter|AttributeItemSetter|None=None, no_access:ScriptAttributeNoAccess|None=None):
     if no_access is None:
         no_access = _DEFAULT_WRITE_WRONG_TYPE
 
     def decor(ff:AttributeSetter|AttributeItemSetter):
         def typecheck_wrapper(o:ScriptValue, n:str|ScriptVariable, v:ScriptVariable):
-            if isinstance(ts, (type, script.ScriptDataType)):
+            if isinstance(ts, type):
                 tlist = [script.wrap_python_type(ts)]
+            elif isinstance(ts, (script.ScriptDataType, script.ScriptTypeAnnotation)):
+                tlist = [ts]
             else:
-                tlist = [script.wrap_python_type(t) for t in ts]
+                tlist = [t if isinstance(t, (script.ScriptDataType, script.ScriptTypeAnnotation)) else script.wrap_python_type(t) for t in ts]
             x = v.get()
-            if x.type.issubtype(*tlist):
+            if x.isinstance(*tlist):
                 return ff(o, n, v)
             else:
                 return no_access(o, n, v)
@@ -303,6 +306,34 @@ def TypedSetter(ts:type|ScriptDataType|list[type|ScriptDataType], f:AttributeSet
         return decor
     else:
         return decor(f)
+
+def _TypedSolo[T](ts:type|ScriptDataType|ScriptTypeAnnotation|list[type|ScriptDataType|ScriptTypeAnnotation], f:T|None=None, no_access:ScriptAttributeNoAccess|None=None):
+    if no_access is None:
+        no_access = _DEFAULT_DELETE_WRONG_TYPE
+
+    def decor(ff:T):
+        def typecheck_wrapper(o:ScriptValue, n:str|ScriptVariable):
+            if isinstance(ts, type):
+                tlist = [script.wrap_python_type(ts)]
+            elif isinstance(ts, (script.ScriptDataType, script.ScriptTypeAnnotation)):
+                tlist = [ts]
+            else:
+                tlist = [t if isinstance(t, (script.ScriptDataType, script.ScriptTypeAnnotation)) else script.wrap_python_type(t) for t in ts]
+            if isinstance(n, str):
+                if script.ScriptValue(script.DATA_TYPE_TABLE[str], n).isinstance(*tlist):
+                    return ff(o, n)
+            elif n.get().isinstance(*tlist):
+                return ff(o, n)
+            return no_access(o, n)
+        return typecheck_wrapper
+
+    if f is None:
+        return decor
+    else:
+        return decor(f)
+    
+TypedGetter:Callable[[type|ScriptDataType|ScriptTypeAnnotation|list[type|ScriptDataType|ScriptTypeAnnotation], AttributeGetter|AttributeItemGetter|None], Callable[[ScriptValue, ScriptVariable|str], Any]|Callable[[AttributeGetter|AttributeItemGetter|None], AttributeGetter|AttributeItemGetter]] = _TypedSolo
+TypedDeleter:Callable[[type|ScriptDataType|ScriptTypeAnnotation|list[type|ScriptDataType|ScriptTypeAnnotation], AttributeDeleter|AttributeItemDeleter|None], Callable[[ScriptValue, ScriptVariable|str], Any]|Callable[[AttributeDeleter|AttributeItemDeleter|None], AttributeDeleter|AttributeItemDeleter]] = _TypedSolo
 
 
 class ScriptValueAttribute[T, K, U]:
@@ -558,7 +589,7 @@ class ScriptAttributeHandler[T,K]:
 _PARAM_NO_DEFAULT = object()
 
 class ScriptFunctionParam:
-    def __init__(self, name:str, dtypes:list[ScriptDataType|str], default=_PARAM_NO_DEFAULT, pack:bool=False):
+    def __init__(self, name:str, dtypes:list[ScriptDataType|ScriptTypeAnnotation|str], default=_PARAM_NO_DEFAULT, pack:bool=False):
         self.name = name
         self.types = dtypes
         self.default = default
@@ -566,12 +597,13 @@ class ScriptFunctionParam:
 
     def resolve_types(self):
         for t in self.types:
-            if isinstance(t, ScriptDataType):
+            if isinstance(t, (script.ScriptDataType, script.ScriptTypeAnnotation)):
                 yield t
             else:
-                tt = script.name_to_type(t)
+                tt = script.parse_script_type_annotation(t)
                 if tt is None:
-                    raise exceptions.TMissingName(f"function signature: type {repr(t)} not defined")
+                    raise exceptions.TMissingName(f"function signature: type or annotation {repr(t)} not defined")
+                yield tt
 
     def __eq__(self, other):
         if isinstance(other, ScriptFunctionParam):
@@ -650,7 +682,7 @@ class ScriptFunctionSignature:
                         v = wrap_python_value(v.inner.value)
                     else:
                         k = None
-                    if not v.type.issubtype(*ts):
+                    if not v.isinstance(*ts):
                         if _p.pack:
                             positional_parameters_encountered += 1
                         else:
@@ -681,7 +713,7 @@ class ScriptFunctionSignature:
                 return i, rtv_args, rtv_kwargs
         return None, None, None
 
-ScriptFunctionParam_Like = ScriptFunctionParam|str|tuple[str]|tuple[str, str|ScriptDataType|type|list[str|ScriptDataType|type]]|dict[str]
+ScriptFunctionParam_Like = ScriptFunctionParam|str|tuple[str]|tuple[str, str|ScriptDataType|ScriptTypeAnnotation|type|list[str|ScriptDataType|ScriptTypeAnnotation|type]]|dict[str]
 
 class ScriptFunction[T]:
 
@@ -725,15 +757,15 @@ class ScriptFunction[T]:
                             tp = p[1]
                             if isinstance(tp, type):
                                 tp = script.DATA_TYPE_TABLE[tp]
-                            if isinstance(tp, (str, ScriptDataType)):
+                            if isinstance(tp, (str, ScriptDataType, ScriptTypeAnnotation)):
                                 p = (p[0], [tp], *p[2:])
                             elif isinstance(tp, list):
                                 tl = []
                                 for v in tp:
                                     if isinstance(v, type):
                                         v = script.DATA_TYPE_TABLE[v]
-                                    elif not isinstance(v, (str, ScriptDataType)):
-                                        raise TypeError(f"script function parameter type union must be made of str, ScriptDataType, or type, got: {type(v).__name__} {v}")
+                                    elif not isinstance(v, (str, ScriptDataType, ScriptTypeAnnotation)):
+                                        raise TypeError(f"script function parameter type union must be made of str, ScriptDataType, ScriptTypeAnnotation, or type, got: {type(v).__name__} {v}")
                                     tl.append(v)
                                 p = (p[0], tl, *p[2:])
                             p = ScriptFunctionParam(*p)
