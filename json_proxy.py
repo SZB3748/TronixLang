@@ -136,7 +136,7 @@ class JsonProxyRoot:
             self._cached = new
 
         if self.savefunc is None:
-            c = json.dumps(self._cached)
+            c = json.dumps(self._cached, ensure_ascii=False)
             with open(self.path, "w") as f:
                 f.write(c)
             saved = True

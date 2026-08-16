@@ -1261,7 +1261,7 @@ def function_format_json(value:ScriptVariable[Any], serialize:ScriptVariable[boo
     if serialize.get().inner or not (x is None or isinstance(x, (str, int, float, bool, list, dict))):
         x = v.type.serialize(v)
     
-    return ScriptValue(String, json.dumps(x))
+    return ScriptValue(String, json.dumps(x, ensure_ascii=False))
 
 @f_parse_json.overload(("json_string", String))
 def function_parse_json(value:ScriptVariable[str]):
@@ -1279,6 +1279,7 @@ def _read_file_json(file:BinaryIO, mimetype:str):
     
 def _write_file_json(file:BinaryIO, mimetype:str, var:ScriptVariable, options:dict[str]={}):
     options.setdefault("indent", 4)
+    options.setdefault("ensure_ascii", False)
     json.dump(var.get().inner, file, **options)
 
 ReadBehavior = Callable[[BinaryIO, str], script.ScriptValue]
