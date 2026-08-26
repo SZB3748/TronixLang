@@ -4,9 +4,9 @@ from .parsingnodes import *
 import hashlib
 import inspect
 import re
-from typing import Any, Awaitable, Callable, Self
+from typing import Any, Awaitable, Callable, Iterable, Self
 
-KEYWORDS = {"if","else","global","var"}
+KEYWORDS = {"if","else","loop","global","var","define","and","or","not"}
 
 PATTERN_NAME = r"(?:[a-zA-Z_][a-zA-Z0-9_]*)"
 PATTERN_OPERATOR = r"(?:\.|[+\-*\/%=><\!]=?)"
@@ -421,15 +421,59 @@ class _step_evaluation:
         return self.cb is not None
     
 class _step_expansion:
+    def __init__(self, new_ns_stackframe:bool=True):
+        self.new_ns_stackframe = new_ns_stackframe
+
+    async def __aiter__(self):
+        raise NotImplementedError
+
+class _fixed_step_expansion(_step_expansion):
     def __init__(self, steps:list[Callable[[],Awaitable]], new_ns_stackframe:bool=True):
         self.steps = steps
         self.new_ns_stackframe = new_ns_stackframe
 
-    def __iter__(self):
-        yield from self.steps
+    async def __aiter__(self):
+        for step in self.steps:
+            yield step
+
+_STEP_CONTROL_TOP = 1
+_STEP_CONTROL_BREAK = 2
+_STEP_CONTROL_SKIP = 4
+
+_DEFAULT_CONTROL_FLAGS_MASK = _STEP_CONTROL_TOP | _STEP_CONTROL_BREAK | _STEP_CONTROL_SKIP
+
+class _step_control:
+    def __init__(self, flags:int, value:int=0):
+        self.flags = flags
+        self.value = value
+
+class _indefinite_step_expansion(_step_expansion):
+    def __init__(self, condition:Callable[[], Awaitable[bool]], next_steps:Callable[[], Iterable[Callable[[], Awaitable]]], new_ns_stackframe:bool=True, control_flags_mask:int|None=None):
+        super().__init__(new_ns_stackframe)
+        self.condition = condition
+        self.next_steps = next_steps
+        self.control_flags_mask = _DEFAULT_CONTROL_FLAGS_MASK if control_flags_mask is None else control_flags_mask
+
+    async def __aiter__(self):
+        skip_yield = 0
+        while await self.condition():
+            for step in self.next_steps():
+                if skip_yield:
+                    skip_yield -= 1
+                    continue
+                control = yield step
+                if isinstance(control, _step_control):
+                    flags = control.flags & self.control_flags_mask
+                    if flags & _STEP_CONTROL_BREAK:
+                        return
+                    elif flags & _STEP_CONTROL_TOP:
+                        break
+                    elif flags & _STEP_CONTROL_SKIP:
+                        skip_yield = max(1, control.value)
+                        
 
 class step_stack_node:
-    def __init__(self, parent, steps:list[Callable[[],Any]]):
+    def __init__(self, parent:"step_stack_node|None", steps:list[Callable[[],Any]]):
         self.parent = parent
         self.steps = steps
 
@@ -456,11 +500,12 @@ _escape_character_mapping = {
 
 _operator_order = [
     {".", "u[]"},
-    {"-u", "+u", "!u"},
+    {"-u", "+u", "notu"},
     {"*", "/", "%"},
     {"+", "-"},
     {"==", "!=", ">=", "<=", ">", "<"},
     {"=", "+=", "-=", "*=", "/=", "%="},
+    {"and", "or"}
 ]
 
 #operator associativity for order sets, True is left-to-right, False is right-to-left. doesn't especially matter for unary
@@ -470,7 +515,8 @@ _operator_direction = {
     2: True,
     3: True,
     4: True,
-    5: False
+    5: False,
+    6: True
 }
 
 
@@ -570,11 +616,35 @@ class Script:
                     raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
                 elif current.codeblock is not None: #if has codeblock
                     current = current.parent.parent
+                return True
+            return False
+
+        def end_loop():
+            nonlocal current
+            if isinstance(current, ParsingNodeLoopStatement) and current.children and isinstance(current.children[-1], ParsingNodeCodeBlock):
+                current = current.parent
+                return True
+            return False
+
+        def end_loopexpr():
+            nonlocal current
+            if isinstance(current, ParsingNodeLoopExpression):
+                current = current.parent
+                return True
+            return False
+
+        def loopexpr_wrap_statement():
+            nonlocal current
+            if isinstance(current, ParsingNodeLoopStatement):
+                node = ParsingNodeLoopExpression(r, current)
+                current.children.append(node)
+                current = node
 
         def wrap_statement():
             nonlocal current
             if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
-                end_condition()
+                end_condition() or end_loop()
+                loopexpr_wrap_statement()
                 exprnode = ParsingNodeExpression(r, current)
                 current.children.append(exprnode)
                 current = exprnode
@@ -598,8 +668,7 @@ class Script:
 
         def fail_vardecl():
             if isinstance(current, ParsingNodeVarDecl):
-                raise exceptions.TExpectedName("expected variable name", target=(current.match.pos, current.match))
-            
+                raise exceptions.TExpectedName("expected variable name", target=(current.match.pos, current.match))   
             
         #build the parse tree
         while True:
@@ -643,13 +712,28 @@ class Script:
                     cond = ParsingNodeConditionPair(r, current)
                     current.children.append(cond)
                     current = cond
-                elif keyword in ("global", "var"):
+                elif keyword == "loop":
                     fail_vardecl()
+                    if isinstance(current, ParsingNodeExpression):
+                        current = current.parent
                     if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
+                        raise exceptions.TUnexpectedKeyword(f"keyword {repr(keyword)} not expected here", target=(i, r))
+                    node = ParsingNodeLoopStatement(r, current)
+                    current.children.append(node)
+                    current = node
+                elif keyword in ("global", "var", "define"):
+                    fail_vardecl()
+                    loopexpr_wrap_statement()
+                    if not (current is root or isinstance(current, (ParsingNodeCodeBlock, ParsingNodeLoopExpression))):
                         raise exceptions.TUnexpectedKeyword(f"keyword {repr(keyword)} not expected here", target=(i, r))
                     node = ParsingNodeVarDecl(r, keyword, current)
                     current.children.append(node)
                     current = node
+                elif keyword in ("not","and","or"):
+                    fail_vardecl()
+                    wrap_statement()
+                    node = ParsingNodeOperator(keyword, r, current)
+                    current.children.append(node)
                 i += r.end() - i
             elif r["function"] is not None:
                 fail_vardecl()
@@ -741,7 +825,7 @@ class Script:
                 i += r.end() - i
             elif r["parenthesis"] is not None:
                 fail_vardecl()
-                end_condition()
+                wrap_statement()
                 node = ParsingNodeParentheses(r, current)
                 current.children.append(node)
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
@@ -749,7 +833,7 @@ class Script:
                 i += r.end() - i
             elif r["subscript"] is not None:
                 fail_vardecl()
-                end_condition()
+                end_condition() or end_loop()
                 node = ParsingNodeSubscript(r, current)
                 current.children.append(node)
                 enclstack = _enclose_stack("[","]", node, current, enclstack)
@@ -767,9 +851,15 @@ class Script:
                         raise exceptions.TExpectedEvaluable("expected evaluable expression as if statement condition but got code block instead", target=(i, r))
                     elif current.codeblock is not None:
                         current = current.parent.parent
+                    basenode = current
+                elif isinstance(current, ParsingNodeLoopExpression):
+                    current = current.parent
+                    basenode = current.parent
+                else:
+                    basenode = current
                 node = ParsingNodeCodeBlock(r, current)
                 current.children.append(node)
-                enclstack = _enclose_stack("{","}", node, current, enclstack)
+                enclstack = _enclose_stack("{","}", node, basenode, enclstack)
                 current = node
                 i += r.end() - i
             elif (enclend := r["enclend"]) is not None:
@@ -793,11 +883,11 @@ class Script:
                 raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
             elif r["semicolon"] is not None:
                 fail_vardecl()
-                end_condition()
+                end_condition() or end_loop() or end_loopexpr()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)) or look_nvpair():
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
                 while current is not None:
-                    if isinstance(current, (ParsingNodeCodeBlock, ParsingNodeIfStatement)):
+                    if isinstance(current, (ParsingNodeCodeBlock, ParsingNodeIfStatement, ParsingNodeLoopStatement)):
                         break
                     current = current.parent
                 else:
@@ -913,7 +1003,6 @@ class Script:
             elif lh is None:
                 lh = child
             else:
-                print(child)
                 raise exceptions.TIncorrectOperandOrder("consecutive operands where operator is expected", target=child)
 
         if root_index is None:
@@ -1071,7 +1160,7 @@ class Script:
                 assert child.value is not None, f"NVPair value is missing {child}"
                 if rtv is not None:
                     rtv.cb = _resolve_nvpair(child)
-            assert not isinstance(child, (ParsingNodeExpression, ParsingNodeParentheses)), f"illegal recursive node: {node} -> {child}"   
+            assert not isinstance(child, ParsingNodeExpression), f"illegal recursive node: {node} -> {child}"
         else:
             os = self._generate_operation_steps(operation_tree)
             if isinstance(os, _step_evaluation) and os:
@@ -1128,20 +1217,73 @@ class Script:
         else:
             rtv.cb = _step
 
+    def _generate_loop_statement_steps(self, node:ParsingNodeLoopStatement, rtv:_step_evaluation|None=None):
+        assert node.children and isinstance(node.children[-1], ParsingNodeCodeBlock), f"loop statement must at least have a code block, got: {node.children}"
+        block = node.children[-1]
+        if len(node.children) > 1:
+            condition_node = node.children[-2]
+            if len(node.children) > 2:
+                init_nodes = node.children[:-2]
+            else:
+                init_nodes = None
+        else:
+            condition_node = None
+
+        init_steps = []
+        if init_nodes:
+            self.steps_stack = step_stack_node(self.steps_stack, init_steps)
+            for node in init_nodes:
+                assert isinstance(node, ParsingNodeLoopExpression), f"loop init node must be loop expression, got: {node}"
+                assert len(node.children) == 1 and isinstance(node.children[0], (ParsingNodeExpression, ParsingNodeParentheses, ParsingNodeVarDecl)), f"loop expression node must contain one expression, got: {node.children}"
+                child = node.children[0]
+                if isinstance(child, ParsingNodeVarDecl):
+                    self._generate_vardecl_step(child, self.scope if child.kw == "var" else self.stack.ns if child.kw == "define" else self.global_scope)
+                self._generate_expression_steps(node.children[0])
+            self.steps_stack = self.steps_stack.parent
+
+        if condition_node is None:
+            async def _condition_step():
+                return True
+        else:
+            condition_step = _step_evaluation()
+            self._generate_expression_steps(condition_node.children[0], condition_step)
+            async def _condition_step():
+                x = await condition_step()
+                if isinstance(x, ScriptValue):
+                    return bool(x.type.conv_bool(x).inner)
+                else:
+                    raise exceptions.TMustEvaluate("loop statement condition expression (the last expression) must evaluate but resulted in no value")
+
+        self.steps_stack = step_stack_node(self.steps_stack, [])
+        self._generate_codeblock_steps(block)
+        block_steps = self.steps_stack.steps
+        self.steps_stack = self.steps_stack.parent
+        indef = _indefinite_step_expansion(_condition_step, lambda: block_steps)
+        async def _step():
+            return indef
+
+        if rtv is None:
+            self.steps_stack.steps.extend(init_steps)
+            self.steps_stack.steps.append(_step)
+        else:
+            exp = _fixed_step_expansion([*init_steps, _step], new_ns_stackframe=False)
+            async def _steps():
+                return exp
+            rtv.cb = _steps
+
+    def _generate_vardecl_step(self, node:ParsingNodeVarDecl, target_ns:Namespace):
+        assert node.name is not None
+        name = node.name.name
+        async def _step():
+            ns = self.stack.find_name(name)
+            if ns is None:
+                target_ns[name] = ScriptVariable(ScriptValue(DATA_TYPE_TABLE[type(None)], None))
+            elif ns is not target_ns:
+                target_ns[name] = ns.pop(name)
+
+        self.steps_stack.steps.append(_step)
 
     def _generate_codeblock_steps(self, node:ParsingNodeCodeBlock):
-        nonetype = type(None)
-        def _resolve_vardelc(node:ParsingNodeVarDecl, target_ns:Namespace):
-            assert node.name is not None
-            name = node.name.name
-            async def _step():
-                ns = self.stack.find_name(name)
-                if ns is None:
-                    target_ns[name] = ScriptVariable(DATA_TYPE_TABLE[nonetype])
-                elif ns is not target_ns:
-                    target_ns[name] = ns.pop(name)
-
-            self.steps_stack.steps.append(_step)
 
         for child in node.children:
             if isinstance(child, (ParsingNodeExpression, ParsingNodeParentheses)):
@@ -1152,8 +1294,10 @@ class Script:
                 self._generate_codeblock_steps(child)
             elif isinstance(child, ParsingNodeIfStatement):
                 self._generate_if_statement_steps(child)
+            elif isinstance(child, ParsingNodeLoopStatement):
+                self._generate_loop_statement_steps(child)
             elif isinstance(child, ParsingNodeVarDecl):
-                _resolve_vardelc(child, self.scope if child.kw == "var" else self.global_scope)
+                self._generate_vardecl_step(child, self.scope if child.kw == "var" else self.stack.ns if child.kw == "define" else self.global_scope)
 
     def compile(self, tree:ParsingNode):
         if self.steps:
@@ -1719,14 +1863,38 @@ def _generate_ne_steps(script:Script, op:_operation_node, lh, rh):
         return x
     return _step
 
+def _generate_and_steps(script:Script, op:_operation_node, lh, rh):
+    if not _validate_vh(lh):
+        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
+    elif not _validate_vh(rh):
+        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
+    async def _step():
+        l = await _resolve_vh(script, lh)
+        r = await _resolve_vh(script, rh)
+        if l.type.conv_bool(l).inner:
+            return r
+        return l
+    return _step
 
+def _generate_or_steps(script:Script, op:_operation_node, lh, rh):
+    if not _validate_vh(lh):
+        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
+    elif not _validate_vh(rh):
+        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value")
+    async def _step():
+        l = await _resolve_vh(script, lh)
+        r = await _resolve_vh(script, rh)
+        if l.type.conv_bool(l).inner:
+            return l
+        return r
+    return _step
 
 _operator_step_generators:dict[str, Callable[[Script, _operation_node, Any, Any], _variable_access|ScriptValue]] = {
     "u[]": _generate_subscript_steps,
     ".": _generate_dot_steps,
     "-u": _generate_usub_steps,
     "+u": _generate_uadd_steps,
-    "!u": _generate_unot_steps,
+    "notu": _generate_unot_steps,
     "*": _generate_mlt_steps,
     "/": _generate_div_steps,
     "%": _generate_mod_steps,
@@ -1744,5 +1912,7 @@ _operator_step_generators:dict[str, Callable[[Script, _operation_node, Any, Any]
     "*=": _generate_imlt_steps,
     "/=": _generate_idiv_steps,
     "%=": _generate_imod_steps,
+    "and": _generate_and_steps,
+    "or": _generate_or_steps
 }
 

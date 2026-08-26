@@ -2,7 +2,7 @@ from .exceptions import *
 from .script import *
 from . import script
 import asyncio
-from typing import Iterable
+from typing import AsyncGenerator, AsyncIterable, Generator, Iterable
 
 from typing import Any, Callable
 
@@ -140,15 +140,54 @@ class ScriptRunner:
     async def run_async(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
         s = self._prep(s, force_parse, force_compile)
 
-        async def _next(steps:Iterable[Callable[[], Awaitable]]):
-            for step in steps:
-                x = await step()
-                if isinstance(x, script._step_expansion):
-                    if x.new_ns_stackframe:
-                        s.stack = script.ns_stack({}, s.stack)
-                    await _next(x.steps)
-                    if x.new_ns_stackframe:
-                        s.stack = s.stack.prev
+        async def _next(steps:AsyncIterable[Callable[[], Awaitable]]|Iterable[Callable[[], Awaitable]]):
+            try:
+                stepiter = aiter(steps)
+            except TypeError:
+                stepiter = iter(steps)
+            if isinstance(stepiter, AsyncGenerator):
+                try:
+                    control = None
+                    while True:
+                        step = await stepiter.asend(control)
+                        control = None
+                        x = await step()
+                        if isinstance(x, script._step_expansion):
+                            if x.new_ns_stackframe:
+                                s.stack = script.ns_stack({}, s.stack)
+                            await _next(x)
+                            if x.new_ns_stackframe:
+                                s.stack = s.stack.prev
+                        elif isinstance(x, script._step_control):
+                            control = x
+                except StopAsyncIteration:
+                    pass
+            elif isinstance(stepiter, Generator):
+                try:
+                    control = None
+                    while True:
+                        step = stepiter.send(control)
+                        control = None
+                        x = await step()
+                        if isinstance(x, script._step_expansion):
+                            if x.new_ns_stackframe:
+                                s.stack = script.ns_stack({}, s.stack)
+                            await _next(x)
+                            if x.new_ns_stackframe:
+                                s.stack = s.stack.prev
+                        elif isinstance(x, script._step_control):
+                            control = x
+                except StopIteration:
+                    pass
+            else:
+                for step in stepiter:
+                    x = await step()
+                    if isinstance(x, script._step_expansion):
+                        if x.new_ns_stackframe:
+                            s.stack = script.ns_stack({}, s.stack)
+                        await _next(x)
+                        if x.new_ns_stackframe:
+                            s.stack = s.stack.prev
 
         await self._run_cbs(s, self.script_start_cbs)
         await _next(s.steps)

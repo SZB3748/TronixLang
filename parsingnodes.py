@@ -48,6 +48,22 @@ class ParsingNodeSubscript(ParsingNode):
 
 class ParsingNodeIfStatement(ParsingNode):
     pass
+
+class ParsingNodeLoopExpression(ParsingNode):
+    def __init__(self, match:Match, parent:"ParsingNodeLoopStatement|None"=None, expression:ParsingNodeExpression|ParsingNodeParentheses|None=None):
+        super().__init__(match, parent, [])
+        if expression is not None:
+            self.children.append(expression)
+
+class ParsingNodeLoopStatement(ParsingNode):
+    def __init__(self, match:Match, parent:ParsingNode|None=None, expressions:list[ParsingNodeLoopExpression]|None=None, codeblock:ParsingNodeCodeBlock|None=None):
+        super().__init__(match, parent, [])
+        if expressions is not None:
+            self.children.extend(expressions)
+        if codeblock is not None:
+            self.children.append(codeblock)
+
+
 class ParsingNodeConditionPair(ParsingNode):
     def __init__(self, match:Match, parent:ParsingNodeIfStatement|None, condition:ParsingNodeExpression|ParsingNodeParentheses|None=None, codeblock:ParsingNodeCodeBlock|None=None, takes_condition:bool=False):
         super().__init__(match, parent, [])

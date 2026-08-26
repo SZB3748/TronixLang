@@ -30,6 +30,8 @@ async def async_returner(ctx:ScriptContext):
     return wrap_python_value(ctx.params[0].get().inner + 1)
 
 f_test_annotations = utils.ScriptFunction()
+f_test_iter = utils.ScriptFunction()
+
 @f_test_annotations.overload(("test", script_builtins.ListOf(script_builtins.String, script_builtins.ListOf(script_builtins.AnyType))))
 def test_annotations(test:ScriptVariable[list[str]]):
     print("A", test.get().inner)
@@ -38,28 +40,32 @@ def test_annotations(test:ScriptVariable[list[str]]):
 def test_annotations_numbers(test:ScriptVariable[list[int|float]]):
     print("B", test.get().inner)
 
+@f_test_iter.overload(("iter_var", [script_builtins.Integer, script_builtins.NullType]), ("limit", script_builtins.Integer))
+def test_iter(iter_var:ScriptVariable[int|None], limit:ScriptVariable[int]):
+    itval = iter_var.get().inner
+    if itval is None:
+        iter_var.assign(wrap_python_value(0))
+        if 0 >= limit.get().inner:
+            return script_builtins.false
+    else:
+        if itval >= limit.get().inner-1:
+            return script_builtins.false
+        iter_var.assign(wrap_python_value(itval+1))
+    return script_builtins.true
+    
+
 SCRIPT_FUNCTION_TABLE["test_async"] = test_async
 SCRIPT_FUNCTION_TABLE["async_returner"] = async_returner
 SCRIPT_FUNCTION_TABLE["await"] = lambda ctx: ctx.params[0].get()
 SCRIPT_FUNCTION_TABLE["test_annotations"] = f_test_annotations
+SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 
 raw = r"""
-deg = degrees(180);
-rad = radians(degrees(45));
-log("degrees:", deg, percent(deg));
-log("radians:", rad, percent(rad));
-log("deg + rad:", deg + rad, percent(deg + rad));
+loop define i; j = 5; test_iter(i, j) {
+    log("test", i)
+}
+log("test end")
 
-log("minute and a half:", minutes(1) + percent(50));
-
-x = 1;
-log(delete("x"));
-l = list(1,2,3);
-log(l);
-log(delete(l, 1), l);
-
-log("annotation test:");
-test_annotations(list("1", list("1", 2)));
 """
 
 s = Script(raw)
