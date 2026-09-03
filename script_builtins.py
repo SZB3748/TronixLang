@@ -8,7 +8,7 @@ import math
 import mimetypes
 import string
 import sys
-from typing import BinaryIO, IO, Iterable
+from typing import BinaryIO, IO, Iterable, Sequence
 import uuid
 
 _TypeTypeAttrs = utils.ScriptAttributeHandler[type,Any](no_subscripting=True)
@@ -217,8 +217,7 @@ def pair_alias_subtype(name:str, firstnames:list[str], secondnames:list[str], in
 def resolve_index_value(obj:ScriptValue, item:ScriptVariable):
     v = item.get()
     if v.type.issubtype(Integer):
-        assert isinstance(v.inner, int)
-        return v.inner
+        return int(v.inner)
     elif v.type.issubtype(Pair):
         assert isinstance(v.inner, _pair)
         try:
@@ -530,7 +529,7 @@ class ListOf(script.ScriptTypeAnnotation):
         return True
     
     def format_data(self):
-        return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+        return " | ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
     
 
 class MapOf(script.ScriptTypeAnnotation):
@@ -541,19 +540,19 @@ class MapOf(script.ScriptTypeAnnotation):
     def parse(cls, data:str)->Self:
         parts = script.split_type_annotation_contents(data, ",")
         if len(parts) > 2:
-            raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} only takes arguments for key and value (got {len(parts)})")
+            raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} takes arguments for key and (optionally) value (got {len(parts)})")
         return cls(*(script.split_type_annotation_contents(part, "|") for part in parts))
     
     def __init__(self, key_types:ScriptDataType|ScriptTypeAnnotation|str|type|list[ScriptDataType|ScriptTypeAnnotation|str|type],
                  value_types:ScriptDataType|ScriptTypeAnnotation|str|type|list[ScriptDataType|ScriptTypeAnnotation|str|type]|None=None):
-        self.key_types = [key_types] if isinstance(key_types, (script.ScriptDataType, script.ScriptTypeAnnotation, type)) else list(key_types)
-        self.value_types = [script.BASE_TYPE] if value_types is None else [value_types] if isinstance(value_types, (script.ScriptDataType, script.ScriptTypeAnnotation, type)) else list(value_types)
+        self.key_types = [key_types] if isinstance(key_types, (script.ScriptDataType, script.ScriptTypeAnnotation, type, str)) else list(key_types)
+        self.value_types = [script.BASE_TYPE] if value_types is None else [value_types] if isinstance(value_types, (script.ScriptDataType, script.ScriptTypeAnnotation, type, str)) else list(value_types)
         self._resolved_keys = False
         self._resolved_values = False
+        if not self.key_types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
         if not self.value_types:
             self.value_types.append(script.BASE_TYPE)
-        if not self.key_types:
-            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations for the map keys")
 
     def _resolve_keys(self):
         if not self._resolved_keys:
@@ -614,9 +613,92 @@ class MapOf(script.ScriptTypeAnnotation):
         return True
     
     def format_data(self):
-        keystr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self.key_types)
-        valstr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self.value_types)
+        keystr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_keys())
+        valstr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_values())
         return f"{keystr}, {valstr}"
+
+class PairOf(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "pair_of"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, ",")
+        if len(parts) > 2:
+            raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} takes either one or two arguments (got {len(parts)})")
+        return cls(*(script.split_type_annotation_contents(part, "|") for part in parts))
+
+    def __init__(self, first_types:ScriptDataType|ScriptTypeAnnotation|str|type|list[ScriptDataType|ScriptTypeAnnotation|str|type],
+                 second_types:ScriptDataType|ScriptTypeAnnotation|str|type|list[ScriptDataType|ScriptTypeAnnotation|str|type]|None=None):
+        self.first_types = [first_types] if isinstance(first_types, (script.ScriptDataType, script.ScriptTypeAnnotation, type, str)) else list(first_types)
+        self.second_types = first_types.copy() if second_types is None else [second_types] if isinstance(second_types, (script.ScriptDataType, script.ScriptTypeAnnotation, type, str)) else list(second_types)
+        self._resolved_first = False
+        self._resolved_second = False
+        if not self.first_types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
+        if not self.second_types:
+            self.second_types = self.first_types.copy()
+
+    def _resolve_first(self):
+        if not self._resolved_first:
+            for i, t in enumerate(self.first_types):
+                if isinstance(t, str):
+                    self.first_types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.first_types[i] = script.wrap_python_type(t)
+            self._resolved_first = True
+        return self.first_types
+    
+    def _resolve_second(self):
+        if not self._resolved_second:
+            for i, t in enumerate(self.second_types):
+                if isinstance(t, str):
+                    self.second_types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.second_types[i] = script.wrap_python_type(t)
+            self._resolved_second = True
+        return self.second_types
+
+    def __eq__(self, other):
+        if isinstance(other, PairOf):
+            return (len(self._resolve_first()) == len(other._resolve_first()) and all(t in other.first_types for t in self.first_types) and
+                    len(self._resolve_second()) == len(other._resolve_second()) and all(t in other.second_types for t in self.second_types))
+        return other == Pair
+
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            if not other.type.issubtype(Pair):
+                return False
+            assert isinstance(other.inner, _pair)
+            p = other.inner
+        elif not isinstance(other, _pair):
+            return False
+        else:
+            p = other
+
+        fdts_l = []
+        fann:list[ScriptTypeAnnotation] = []
+        sdts_l = []
+        sann:list[ScriptTypeAnnotation] = []
+        for t in self._resolve_first():
+            if isinstance(t, script.ScriptDataType):
+                fdts_l.append(t.inner)
+            else:
+                fann.append(t)
+        for t in self._resolve_second():
+            if isinstance(t, script.ScriptDataType):
+                sdts_l.append(t.inner)
+            else:
+                sann.append(t)
+        fdts:tuple[type,...] = tuple(fdts_l)
+        sdts:tuple[type,...] = tuple(sdts_l)
+
+        return (fdts and isinstance(p.first, fdts) or any(a.compare(p.first) for a in fann)) and (sdts and isinstance(p.second, sdts) or any(a.compare(p.second) for a in sann))
+
+    def format_data(self):
+        firststr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_first())
+        secondstr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_second())
+        return f"{firststr}, {secondstr}"
     
 
 _ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_wrapper,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
@@ -634,6 +716,271 @@ class _MapReadonlyType(_MapType):
 
     attrs = _MapReadonlyTypeAttrs
     attrs.wildcard.noset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).nodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
+
+
+_IT_COPY_KEEP = object()
+class _iterator[T](int):
+
+    @classmethod
+    def from_bytes(cls, bytes, byteorder="big", *, signed=False):
+        return cls(super().from_bytes(bytes, byteorder, signed=signed))
+
+    def __init__(self, value:int):
+        self.value = int(value)
+
+    def _copy(self, value:int=_IT_COPY_KEEP):
+        cls = type(self)
+        n = cls.__new__(cls)
+        n.__dict__.update(self.__dict__)
+        if value is not _IT_COPY_KEEP:
+            n.value = int(value)
+        return n
+
+    async def next(self)->Self|None:
+        return NotImplemented
+
+    async def get(self)->T:
+        return NotImplemented
+
+    def __int__(self):
+        return self.value
+
+    def __index__(self):
+        return self.value
+
+    def __float__(self):
+        return float(self.value)
+
+    def __str__(self):
+        return str(self.value)
+
+    def __bool__(self):
+        return bool(self.value)
+
+    def __hash__(self):
+        return self.value.__hash__()
+
+    def __trunc__(self):
+        return self._copy(self.value.__trunc__())
+
+    def __round__(self, ndigits = ...):
+        return self._copy(self.value.__round__(ndigits))
+
+    def __abs__(self):
+        return self._copy(self.value.__abs__())
+
+    def __neg__(self):
+        return self._copy(self.value.__neg__())
+
+    def __pos__(self):
+        return self._copy(self.value.__pos__())
+
+    def __add__(self, value):
+        return self._copy(self.value.__add__(value))
+
+    def __sub__(self, value):
+        return self._copy(self.value.__sub__(value))
+
+    def __mul__(self, value):
+        return self._copy(self.value.__mul__(value))
+
+    def __truediv__(self, value):
+        return self._copy(self.value.__truediv__(value))
+
+    def __floordiv__(self, value):
+        return self._copy(self.value.__floordiv__(value))
+
+    def __pow__(self, value):
+        return self._copy(self.value.__pow__(value))
+
+    def __mod__(self, value):
+        return self._copy(self.value.__mod__(value))
+
+    def __radd__(self, value):
+        return self._copy(self.value.__radd__(value))
+
+    def __rsub__(self, value):
+        return self._copy(self.value.__rsub__(value))
+
+    def __rmul__(self, value):
+        return self._copy(self.value.__rmul__(value))
+
+    def __rtruediv__(self, value):
+        return self._copy(self.value.__rtruediv__(value))
+
+    def __rfloordiv__(self, value):
+        return self._copy(self.value.__rfloordiv__(value))
+
+    def __eq__(self, value):
+        if isinstance(value, _iterator):
+            return self.value == value
+        return self.value.__eq__(value)
+    
+    def __ne__(self, value):
+        if isinstance(value, _iterator):
+            return self.value != value
+        return self.value.__ne__(value)
+    
+    def __gt__(self, value):
+        if isinstance(value, _iterator):
+            return self.value > value
+        return self.value.__gt__(value)
+
+    def __ge__(self, value):
+        if isinstance(value, _iterator):
+            return self.value >= value
+        return self.value.__ge__(value)
+    
+    def __lt__(self, value):
+        if isinstance(value, _iterator):
+            return self.value < value
+        return self.value.__lt__(value)
+
+    def __le__(self, value):
+        if isinstance(value, _iterator):
+            return self.value <= value
+        return self.value.__le__(value)
+
+    def __invert__(self):
+        return self._copy(self.value.__invert__())
+
+    def __and__(self, value):
+        return self._copy(self.value.__and__(value))
+
+    def __or__(self, value):
+        return self._copy(self.value.__or__(value))
+
+    def __xor__(self, value):
+        return self._copy(self.value.__xor__(value))
+
+    def __rand__(self, value):
+        return self._copy(self.value.__rand__(value))
+
+    def __ror__(self, value):
+        return self._copy(self.value.__ror__(value))
+
+    def __rxor__(self, value):
+        return self._copy(self.value.__rxor__(value))
+
+    def __lshift__(self, value):
+        return self._copy(self.value.__lshift__(value))
+
+    def __rshift__(self, value):
+        return self._copy(self.value.__rshift__(value))
+
+    def __rlshift__(self, value):
+        return self._copy(self.value.__rlshift__(value))
+
+    def __rrshift__(self, value):
+        return self._copy(self.value.__rrshift__(value))
+
+    def as_integer_ratio(self):
+        return self.value.as_integer_ratio()
+
+    def bit_count(self):
+        return self.value.bit_count()
+
+    def bit_length(self):
+        return self.value.bit_length()
+
+    def conjugate(self):
+        return self.value.conjugate()
+
+    def to_bytes(self, length=1, byteorder="big", *, signed=False):
+        return self.value.to_bytes(length, byteorder, signed=signed)
+
+    @property
+    def denominator(self):
+        return self.value.denominator
+
+    @property
+    def imag(self):
+        return self.value.imag
+
+    @property
+    def numerator(self):
+        return self.value.numerator
+
+    @property
+    def real(self):
+        return self.value.real
+
+class _range_iterator[T](_iterator[T]):
+    def __init__(self, start:int, stop:int, step:int):
+        super().__init__(self.start)
+        self.start = start
+        self.stop = stop
+        self.step = step
+
+    def in_range(self, v:int):
+        if self.step >= 0:
+            return v >= self.start and v < self.stop
+        else:
+            return v <= self.start and v > self.stop
+
+
+    def next(self):
+        n = self + self.step
+        if self.in_range(self.value):
+            return n
+        else:
+            return None
+
+    def get(self):
+        return self.value
+
+class _iterable_iterator[T](_iterator[T]):
+    def __init__(self, iterable:Iterable[T]):
+        super().__init__(-1)
+        self.iterable = iterable
+        self._last = -1
+        self._last_value = None
+
+    def next(self):
+        self.value += 1
+        if self._last > self.value:
+            raise TypeError("cannot reverse iterate with this iterator")
+        try:
+            while self._last < self.value:
+                self._last_value = next(self.iterable)
+                self._last += 1
+        except StopIteration:
+            return None
+        return self
+
+    def get(self):
+        return self._last_value
+        
+class _sequence_iterator[T](_range_iterator[T]):
+    def __init__(self, start:int, stop:int, step:int, sequence:Sequence[T]):
+        super().__init__(start, stop, step)
+        self.sequence = sequence
+
+    def get(self):
+        return self.sequence[self.value]
+
+_IteratorTypeAttrs = utils.ScriptAttributeHandler[_iterator, Any]()
+@_IteratorTypeAttrs.enforce_child_attrs()
+@_IteratorTypeAttrs.attach
+class _IteratorType[T:_iterator](ScriptDataType[T]):
+
+    attrs = _IteratorTypeAttrs
+
+def make_iterator_type[X:_iterator](name:str, it_t:type[X], parent:type[_IteratorType])->type[_IteratorType[X]]:
+    _attrs = utils.ScriptAttributeHandler[it_t, Any](parent.attrs)
+    @_attrs.enforce_child_attrs()
+    @_attrs.attach
+    class _subt[T](parent[it_t[T]]):
+        attrs = _attrs
+    _subt.__name__ = name
+    return _subt
+
+_RangeIteratorType = make_iterator_type("_RangeIteratorType", _range_iterator,_IteratorType)
+_RangeIteratorTypeAttrs = _RangeIteratorType.attrs
+_IterableIteratorType = make_iterator_type("_IterableIteratorType", _iterable_iterator, _IteratorType)
+_IterableIteratorTypeAttrs = _IterableIteratorType.attrs
+_SequenceIteratorType = make_iterator_type("_SequenceIteratorType", _sequence_iterator, _RangeIteratorType)
+_SequenceIteratorTypeAttrs = _SequenceIteratorType.attrs
 
 _UUIDTypeAttrs = utils.ScriptAttributeHandler[uuid.UUID,Any](no_subscripting=True)
 @_UUIDTypeAttrs.enforce_child_attrs()
@@ -821,7 +1168,7 @@ class _file_wrapper:
     def __init__(self, file:IO[bytes]):
         self.file = file
 
-_FileTypeAttrs = utils.ScriptAttributeHandler(no_subscripting=True)
+_FileTypeAttrs = utils.ScriptAttributeHandler[_file_wrapper, Any](no_subscripting=True)
 @_FileTypeAttrs.enforce_child_attrs()
 @_FileTypeAttrs.attach
 class _FileType(script.ScriptDataType[_file_wrapper]):
@@ -829,9 +1176,9 @@ class _FileType(script.ScriptDataType[_file_wrapper]):
     construct = f_construct = utils.ScriptFunction()
 
     attrs = _FileTypeAttrs
-    attrs.entry("name").readonly(utils.SimpleGetAttribute())
-    attrs.entry("mode").readonly(utils.SimpleGetAttribute())
-    attrs.entry("fileno").readonly(utils.MethodGetAttribute())
+    attrs.entry("name").readonly(lambda o,n: null if not isinstance((name := o.inner.file.name), str) else script.wrap_python_value(name))
+    attrs.entry("mode").readonly(lambda o,n: script.wrap_python_value(o.inner.file.mode))
+    attrs.entry("fileno").readonly(lambda o,n: script.wrap_python_value(o.inner.file.fileno()))
 
 class _DurationBaseType[T:durtypes._duration](script.ScriptDataType[T]):
 
@@ -945,6 +1292,10 @@ List = _ListType("list", list, BASE_TYPE)
 Map = _MapType("map", dict, BASE_TYPE)
 List_readonly = _ListReadonlyType("_list_readonly", _rolist_wrapper, List)
 Map_readonly = _MapReadonlyType("_map_readonly", _rodict_wrapper, Map)
+Iterator = _IteratorType("iterator", _iterator, Integer)
+RangeIterator = _RangeIteratorType("range_iterator", _range_iterator, Iterator)
+IterableIterator = _IterableIteratorType("iterable_iterator", _iterable_iterator, Iterator)
+SequenceIterator = _SequenceIteratorType("sequence_iterator", _sequence_iterator, RangeIterator)
 UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
 JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TYPE)
 JsonNode = _JsonProxyNodeType("JsonNode", json_proxy.JsonProxyNode, BASE_TYPE)
@@ -987,7 +1338,7 @@ def type_construct(self, value:ScriptVariable):
 def float_construct_identity(self, value:ScriptVariable[float]):
     return script.ScriptValue(self, value.get().inner)
 
-@_FloatType.f_construct.overload(("value", [Integer,Bool,String,Percent,Degrees,Radians,Duration,ComplexDuration]))
+@_FloatType.f_construct.overload(("value", [Integer,Bool,String,Percent,Degrees,Radians,Duration,ComplexDuration,Iterator]))
 def float_construct(self, value:ScriptVariable[int|bool|str|numunits.percent|numunits.degrees|numunits.radians|durtypes._duration|durtypes._complex_duration]):
     return script.ScriptValue(self, float(value.get().inner))
 
@@ -995,7 +1346,7 @@ def float_construct(self, value:ScriptVariable[int|bool|str|numunits.percent|num
 def integer_construct_identity(self, value:ScriptVariable[int]):
     return script.ScriptValue(self, value.get().inner)
 
-@_IntegerType.f_construct.overload(("value", [Bool,String,Float,Percent,Degrees,Radians,Duration,ComplexDuration]))
+@_IntegerType.f_construct.overload(("value", [Bool,String,Float,Percent,Degrees,Radians,Duration,ComplexDuration,Iterator]))
 def integer_construct_convert(self, value:ScriptVariable[bool|str|float|numunits.percent|numunits.degrees|numunits.radians|durtypes._duration|durtypes._complex_duration]):
     return script.ScriptValue(self, int(value.get().inner))
 
@@ -1160,6 +1511,9 @@ f_close = ScriptFunction()
 f_append = ScriptFunction()
 f_find = ScriptFunction()
 f_contains = ScriptFunction()
+f_iterate_over = ScriptFunction()
+f_iterate_over_range = ScriptFunction()
+f_next = ScriptFunction()
 f_delete = ScriptFunction()
 f_delete_attribute = ScriptFunction()
 
@@ -1432,6 +1786,82 @@ def map_contains(target:ScriptVariable[dict], value:ScriptVariable):
         return true
     else:
         return false
+
+@f_contains.overload(("target", SequenceIterator), ("value", [AnyType, NamePair]))
+def sequence_iter_contains(target:ScriptVariable[_sequence_iterator], value:ScriptVariable):
+    if value.get().inner in target.get().inner.sequence:
+        return true
+    else:
+        return false
+
+@f_contains.overload(("target", RangeIterator), ("value", [AnyType, NamePair]))
+def range_iter_contains(target:ScriptVariable[_range_iterator], value:ScriptVariable):
+    return target.get().inner.in_range(value.get().inner)
+
+_STR_ITERATE_STOP_DEFAULT = sys.maxsize
+@f_iterate_over.overload(("target", String), ("start", Integer, 0), ("stop", Integer, _STR_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
+def str_iterate_over(target:ScriptVariable[str], start:ScriptVariable[int], stop:ScriptVariable[int], step:ScriptVariable[int]):
+    return script.wrap_python_value(_sequence_iterator(start.get().inner, stop.get().inner, step.get().inner, target.get().inner))
+
+_LIST_ITERATE_STOP_DEFAULT = sys.maxsize
+@f_iterate_over.overload(("target", List), ("start", Integer, 0), ("stop", Integer, _LIST_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
+def list_literate_over(target:ScriptVariable[list], start:ScriptVariable[int], stop:ScriptVariable[int], step:ScriptVariable[int]):
+    return script.wrap_python_value(_sequence_iterator(start.get().inner, stop.get().inner, step.get().inner, target.get().inner))
+
+@f_iterate_over.overload(("target", Map))
+def map_literate_over(target:ScriptVariable[dict]):
+    return script.wrap_python_value(_iterable_iterator(target.get().inner.keys()))
+
+@f_iterate_over.overload(("target", Iterator))
+def iterator_iterate_over(target:ScriptVariable[_iterator]):
+    return target.get()
+
+@f_iterate_over_range.overload(("start", Integer, 0), ("stop", Integer, _LIST_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
+def iterate_over_range(start:ScriptVariable[int], stop:ScriptVariable[int], step:ScriptVariable[int]):
+    return script.wrap_python_value(_range_iterator(start.get().inner, stop.get().inner, step.get().inner))
+
+@f_next.overload(("iterator", Iterator))
+async def iterator_next(iterator:ScriptVariable[_iterator]):
+    it = iterator.get().inner
+    try:
+        n = await it.next()
+    except NotImplementedError as e:
+        raise exceptions.TNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented") from e
+    except Exception as e:
+        raise exceptions.wrap(e)
+    if n is NotImplemented:
+        raise exceptions.TNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented")
+    elif n is None:
+        return false
+    else:
+        iterator.assign(script.wrap_python_value(n))
+        return true
+
+@f_next.overload(("iterator", Iterator), ("out", (AnyType, NamePair)))
+async def iterator_out_next(iterator:ScriptVariable[_iterator], out:ScriptVariable):
+    it = iterator.get().inner
+    it = iterator.get().inner
+    try:
+        n = await it.next()
+    except NotImplementedError as e:
+        raise exceptions.TNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented") from e
+    except Exception as e:
+        raise exceptions.wrap(e)
+    if n is NotImplemented:
+        raise exceptions.TNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented")
+    elif n is None:
+        return false
+    iterator.assign(script.wrap_python_value(n))
+    try:
+        v = await n.get()
+    except NotImplementedError as e:
+        raise exceptions.TNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values") from e
+    except Exception as e:
+        raise exceptions.wrap(e)
+    if n is NotImplemented:
+        raise exceptions.TNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values")
+    out.assign(script.wrap_python_value(v))
+    return true
     
 @f_delete.overload(("name", String), pass_ctx=True)
 def delete_name(ctx:ScriptContext, name:ScriptVariable[str]):
@@ -1482,6 +1912,9 @@ def activate():
     utils.merge_function("append", f_append)
     utils.merge_function("find", f_find)
     utils.merge_function("contains", f_contains)
+    utils.merge_function("iterate_over", f_iterate_over)
+    utils.merge_function("iterate_over_range", f_iterate_over_range)
+    utils.merge_function("next", f_next)
     utils.merge_function("delete", f_delete)
     utils.merge_function("delete_attribute", f_delete_attribute)
 
@@ -1514,5 +1947,8 @@ def deactivate():
     utils.remove_function("append", f_append)
     utils.remove_function("find", f_find)
     utils.remove_function("contains", f_contains)
+    utils.remove_function("iterate_over", f_iterate_over)
+    utils.remove_function("iterate_over_range", f_iterate_over_range)
+    utils.remove_function("next", f_next)
     utils.remove_function("delete", f_delete)
     utils.remove_function("delete_attribute", f_delete_attribute)

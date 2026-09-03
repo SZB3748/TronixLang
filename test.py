@@ -61,8 +61,8 @@ SCRIPT_FUNCTION_TABLE["test_annotations"] = f_test_annotations
 SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 
 raw = r"""
-loop define i; j = 5; test_iter(i, j) {
-    log("test", i)
+loop i = iterate_over_range(0, 5); next(i) {
+    log("test", int(i))
 }
 log("test end")
 
