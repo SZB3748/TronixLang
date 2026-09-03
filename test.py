@@ -63,14 +63,12 @@ SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 raw = r"""
 names = list("SZB", "Ein", "Third Guy");
 y = true;
-loop i = iterate_over(names); i < names.length {
-    if i == 2 and y {
-        reset(i);
-        y = false;
-    } else {
-        log(names[i], i);
+loop i = iterate_over(names); next(i) {
+    if i == 1 and y {
+        y = false;   
+        skip;
     }
-    i += 1;
+    log(names[i], i);
 }
 """
 

@@ -139,8 +139,10 @@ class ScriptRunner:
 
     async def run_async(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
         s = self._prep(s, force_parse, force_compile)
+        control = None
 
         async def _next(steps:AsyncIterable[Callable[[], Awaitable]]|Iterable[Callable[[], Awaitable]]):
+            nonlocal control
             try:
                 stepiter = aiter(steps)
             except TypeError:

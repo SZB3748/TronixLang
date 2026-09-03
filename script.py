@@ -6,7 +6,7 @@ import inspect
 import re
 from typing import Any, Awaitable, Callable, Iterable, Self
 
-KEYWORDS = {"if","else","loop","global","var","define","and","or","not"}
+KEYWORDS = {"if","else","loop","global","var","define","and","or","not","break","skip"}
 
 PATTERN_NAME = r"(?:[a-zA-Z_][a-zA-Z0-9_]*)"
 PATTERN_OPERATOR = r"(?:\.|[+\-*\/%=><\!]=?)"
@@ -421,20 +421,12 @@ class _step_evaluation:
         return self.cb is not None
     
 class _step_expansion:
-    def __init__(self, new_ns_stackframe:bool=True):
+    def __init__(self, new_ns_stackframe:bool=True, handle_step_control:bool=False):
         self.new_ns_stackframe = new_ns_stackframe
+        self.handle_step_control = handle_step_control
 
     async def __aiter__(self):
         raise NotImplementedError
-
-class _fixed_step_expansion(_step_expansion):
-    def __init__(self, steps:list[Callable[[],Awaitable]], new_ns_stackframe:bool=True):
-        self.steps = steps
-        self.new_ns_stackframe = new_ns_stackframe
-
-    async def __aiter__(self):
-        for step in self.steps:
-            yield step
 
 _STEP_CONTROL_TOP = 1
 _STEP_CONTROL_BREAK = 2
@@ -447,9 +439,32 @@ class _step_control:
         self.flags = flags
         self.value = value
 
+class _fixed_step_expansion(_step_expansion):
+    def __init__(self, steps:list[Callable[[],Awaitable]], new_ns_stackframe:bool=True, handle_step_control:bool=False, control_flags_mask:int=_DEFAULT_CONTROL_FLAGS_MASK):
+        super().__init__(new_ns_stackframe, handle_step_control)
+        self.steps = steps
+        self.control_flags_mask = control_flags_mask
+
+    async def __aiter__(self):
+        i = 0
+        while i < len(self.steps):
+            control = yield self.steps[i]
+            if isinstance(control, _step_control):
+                if self.handle_step_control:
+                    flags = control.flags & self.control_flags_mask
+                    if flags & _STEP_CONTROL_BREAK:
+                        return
+                    elif flags & _STEP_CONTROL_TOP:
+                        i = 0
+                    elif flags & _STEP_CONTROL_SKIP:
+                        i += max(1, control.value)
+                else:
+                    break
+            i += 1
+
 class _indefinite_step_expansion(_step_expansion):
-    def __init__(self, condition:Callable[[], Awaitable[bool]], next_steps:Callable[[], Iterable[Callable[[], Awaitable]]], new_ns_stackframe:bool=True, control_flags_mask:int|None=None):
-        super().__init__(new_ns_stackframe)
+    def __init__(self, condition:Callable[[], Awaitable[bool]], next_steps:Callable[[], Iterable[Callable[[], Awaitable]]], new_ns_stackframe:bool=True, handle_step_control:bool=False, control_flags_mask:int|None=None):
+        super().__init__(new_ns_stackframe, handle_step_control)
         self.condition = condition
         self.next_steps = next_steps
         self.control_flags_mask = _DEFAULT_CONTROL_FLAGS_MASK if control_flags_mask is None else control_flags_mask
@@ -668,7 +683,18 @@ class Script:
 
         def fail_vardecl():
             if isinstance(current, ParsingNodeVarDecl):
-                raise exceptions.TExpectedName("expected variable name", target=(current.match.pos, current.match))   
+                raise exceptions.TExpectedName("expected variable name", target=(current.match.pos, current.match))
+
+        def check_loopcontrol():
+            node = current
+            block = False
+            while node is not None:
+                if isinstance(node, ParsingNodeCodeBlock):
+                    block = True
+                elif isinstance(node, ParsingNodeLoopStatement):
+                    return block
+                node = node.parent
+            return False
             
         #build the parse tree
         while True:
@@ -733,6 +759,16 @@ class Script:
                     fail_vardecl()
                     wrap_statement()
                     node = ParsingNodeOperator(keyword, r, current)
+                    current.children.append(node)
+                elif keyword in ("break", "skip"):
+                    fail_vardecl()
+                    if not check_loopcontrol():
+                        raise exceptions.TUnexpectedKeyword(f"keyword {repr(keyword)} not expected here", target=(i, r))
+                    if keyword == "break":
+                        flags = _STEP_CONTROL_BREAK
+                    else:
+                        flags = _STEP_CONTROL_TOP
+                    node = ParsingNodeLoopControl(flags, 0, r, current)
                     current.children.append(node)
                 i += r.end() - i
             elif r["function"] is not None:
@@ -1258,7 +1294,7 @@ class Script:
         self._generate_codeblock_steps(block)
         block_steps = self.steps_stack.steps
         self.steps_stack = self.steps_stack.parent
-        indef = _indefinite_step_expansion(_condition_step, lambda: block_steps)
+        indef = _indefinite_step_expansion(_condition_step, lambda: block_steps, handle_step_control=True)
         async def _step():
             return indef
 
@@ -1283,8 +1319,12 @@ class Script:
 
         self.steps_stack.steps.append(_step)
 
-    def _generate_codeblock_steps(self, node:ParsingNodeCodeBlock):
+    def _generate_loop_control_step(self, node:ParsingNodeLoopControl):
+        async def _step():
+            return _step_control(node.flags, node.value)
+        self.steps_stack.steps.append(_step)
 
+    def _generate_codeblock_steps(self, node:ParsingNodeCodeBlock):
         for child in node.children:
             if isinstance(child, (ParsingNodeExpression, ParsingNodeParentheses)):
                 self._generate_expression_steps(child)
@@ -1298,6 +1338,8 @@ class Script:
                 self._generate_loop_statement_steps(child)
             elif isinstance(child, ParsingNodeVarDecl):
                 self._generate_vardecl_step(child, self.scope if child.kw == "var" else self.stack.ns if child.kw == "define" else self.global_scope)
+            elif isinstance(child, ParsingNodeLoopControl):
+                self._generate_loop_control_step(child)
 
     def compile(self, tree:ParsingNode):
         if self.steps:

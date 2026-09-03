@@ -164,3 +164,9 @@ class ParsingNodeVarDecl(ParsingNode):
             self.children[0] = value
         else:
             self.children.append(value)
+
+class ParsingNodeLoopControl(ParsingNode_Terminating):
+    def __init__(self, flags:int, value:int, match:Match, parent:ParsingNode|None=None):
+        super().__init__(match, parent)
+        self.flags = flags
+        self.value = value
