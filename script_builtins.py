@@ -287,6 +287,7 @@ class _MapType(ScriptDataType[dict]):
 
     attrs = _MapTypeAttrs
     attrs.entry("length").readonly(lambda o, n: script.wrap_python_value(len(o.inner)))
+    attrs.entry("keys").readonly
 
     def repr(self, value):
         return ScriptValue(String, f"{self.name}({", ".join((k:=wrap_python_value(kx)).type.repr(k).inner + ": " + (v:=wrap_python_value(vx)).type.repr(v).inner for kx, vx in value.inner.items())})")
@@ -718,23 +719,20 @@ class _MapReadonlyType(_MapType):
     attrs.wildcard.noset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).nodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
 
 
-_IT_COPY_KEEP = object()
 class _iterator[T](int):
 
     @classmethod
     def from_bytes(cls, bytes, byteorder="big", *, signed=False):
         return cls(super().from_bytes(bytes, byteorder, signed=signed))
 
-    def __init__(self, value:int):
-        self.value = int(value)
+    def __new__(cls, value:int=0, *args, **kwargs):
+        return super().__new__(cls, value)
 
-    def _copy(self, value:int=_IT_COPY_KEEP):
+    def _copy(self, value:int):
         cls = type(self)
-        n = cls.__new__(cls)
-        n.__dict__.update(self.__dict__)
-        if value is not _IT_COPY_KEEP:
-            n.value = int(value)
-        return n
+        new = cls.__new__(cls, value)
+        new.__dict__.update(self.__dict__)
+        return new
 
     async def next(self)->Self|None:
         return NotImplemented
@@ -742,172 +740,140 @@ class _iterator[T](int):
     async def get(self)->T:
         return NotImplemented
 
-    def __int__(self):
-        return self.value
-
     def __index__(self):
-        return self.value
+        return int(self)
 
     def __float__(self):
-        return float(self.value)
+        return float(self)
 
     def __str__(self):
-        return str(self.value)
+        return "%d" % int(self)
+
+    def __repr__(self):
+        return f"<{type(self).__name__} {int(self)} at {hex(id(self)).upper()}>"
 
     def __bool__(self):
-        return bool(self.value)
+        return bool(self)
 
     def __hash__(self):
-        return self.value.__hash__()
+        return hash(int(self))
 
     def __trunc__(self):
-        return self._copy(self.value.__trunc__())
+        return self._copy(super(_iterator, self).__trunc__())
 
     def __round__(self, ndigits = ...):
-        return self._copy(self.value.__round__(ndigits))
+        return self._copy(super(_iterator, self).__round__(ndigits))
 
     def __abs__(self):
-        return self._copy(self.value.__abs__())
+        return self._copy(super(_iterator, self).__abs__())
 
     def __neg__(self):
-        return self._copy(self.value.__neg__())
+        return self._copy(super(_iterator, self).__neg__())
 
     def __pos__(self):
-        return self._copy(self.value.__pos__())
+        return self._copy(super(_iterator, self).__pos__())
 
     def __add__(self, value):
-        return self._copy(self.value.__add__(value))
+        return self._copy(super(_iterator, self).__add__(value))
 
     def __sub__(self, value):
-        return self._copy(self.value.__sub__(value))
+        return self._copy(super(_iterator, self).__sub__(value))
 
     def __mul__(self, value):
-        return self._copy(self.value.__mul__(value))
+        return self._copy(super(_iterator, self).__mul__(value))
 
     def __truediv__(self, value):
-        return self._copy(self.value.__truediv__(value))
+        return self._copy(super(_iterator, self).__truediv__(value))
 
     def __floordiv__(self, value):
-        return self._copy(self.value.__floordiv__(value))
+        return self._copy(super(_iterator, self).__floordiv__(value))
 
     def __pow__(self, value):
-        return self._copy(self.value.__pow__(value))
+        return self._copy(super(_iterator, self).__pow__(value))
 
     def __mod__(self, value):
-        return self._copy(self.value.__mod__(value))
+        return self._copy(super(_iterator, self).__mod__(value))
 
     def __radd__(self, value):
-        return self._copy(self.value.__radd__(value))
+        return self._copy(super(_iterator, self).__radd__(value))
 
     def __rsub__(self, value):
-        return self._copy(self.value.__rsub__(value))
+        return self._copy(super(_iterator, self).__rsub__(value))
 
     def __rmul__(self, value):
-        return self._copy(self.value.__rmul__(value))
+        return self._copy(super(_iterator, self).__rmul__(value))
 
     def __rtruediv__(self, value):
-        return self._copy(self.value.__rtruediv__(value))
+        return self._copy(super(_iterator, self).__rtruediv__(value))
 
     def __rfloordiv__(self, value):
-        return self._copy(self.value.__rfloordiv__(value))
+        return self._copy(super(_iterator, self).__rfloordiv__(value))
 
     def __eq__(self, value):
         if isinstance(value, _iterator):
-            return self.value == value
-        return self.value.__eq__(value)
+            return int(self) == int(value)
+        return int(self) == value
     
     def __ne__(self, value):
         if isinstance(value, _iterator):
-            return self.value != value
-        return self.value.__ne__(value)
+            return int(self) != int(value)
+        return int(self) != value
     
     def __gt__(self, value):
         if isinstance(value, _iterator):
-            return self.value > value
-        return self.value.__gt__(value)
+            return int(self) > int(value)
+        return int(self) > value
 
     def __ge__(self, value):
         if isinstance(value, _iterator):
-            return self.value >= value
-        return self.value.__ge__(value)
+            return int(self) >= int(value)
+        return int(self) >= value
     
     def __lt__(self, value):
         if isinstance(value, _iterator):
-            return self.value < value
-        return self.value.__lt__(value)
+            return int(self) < int(value)
+        return int(self) < value
 
     def __le__(self, value):
         if isinstance(value, _iterator):
-            return self.value <= value
-        return self.value.__le__(value)
+            return int(self) <= int(value)
+        return int(self) <= value
 
     def __invert__(self):
-        return self._copy(self.value.__invert__())
+        return self._copy(super(_iterator, self).__invert__())
 
     def __and__(self, value):
-        return self._copy(self.value.__and__(value))
+        return self._copy(super(_iterator, self).__and__(value))
 
     def __or__(self, value):
-        return self._copy(self.value.__or__(value))
+        return self._copy(super(_iterator, self).__or__(value))
 
     def __xor__(self, value):
-        return self._copy(self.value.__xor__(value))
+        return self._copy(super(_iterator, self).__xor__(value))
 
     def __rand__(self, value):
-        return self._copy(self.value.__rand__(value))
+        return self._copy(super(_iterator, self).__rand__(value))
 
     def __ror__(self, value):
-        return self._copy(self.value.__ror__(value))
+        return self._copy(super(_iterator, self).__ror__(value))
 
     def __rxor__(self, value):
-        return self._copy(self.value.__rxor__(value))
+        return self._copy(super(_iterator, self).__rxor__(value))
 
     def __lshift__(self, value):
-        return self._copy(self.value.__lshift__(value))
+        return self._copy(super(_iterator, self).__lshift__(value))
 
     def __rshift__(self, value):
-        return self._copy(self.value.__rshift__(value))
+        return self._copy(super(_iterator, self).__rshift__(value))
 
     def __rlshift__(self, value):
-        return self._copy(self.value.__rlshift__(value))
+        return self._copy(super(_iterator, self).__rlshift__(value))
 
     def __rrshift__(self, value):
-        return self._copy(self.value.__rrshift__(value))
-
-    def as_integer_ratio(self):
-        return self.value.as_integer_ratio()
-
-    def bit_count(self):
-        return self.value.bit_count()
-
-    def bit_length(self):
-        return self.value.bit_length()
-
-    def conjugate(self):
-        return self.value.conjugate()
-
-    def to_bytes(self, length=1, byteorder="big", *, signed=False):
-        return self.value.to_bytes(length, byteorder, signed=signed)
-
-    @property
-    def denominator(self):
-        return self.value.denominator
-
-    @property
-    def imag(self):
-        return self.value.imag
-
-    @property
-    def numerator(self):
-        return self.value.numerator
-
-    @property
-    def real(self):
-        return self.value.real
+        return self._copy(super(_iterator, self).__rrshift__(value))
 
 class _range_iterator[T](_iterator[T]):
-    def __init__(self, start:int, stop:int, step:int):
-        super().__init__(self.start)
+    def __init__(self, value:int, start:int, stop:int, step:int):
         self.start = start
         self.stop = stop
         self.step = step
@@ -918,46 +884,58 @@ class _range_iterator[T](_iterator[T]):
         else:
             return v <= self.start and v > self.stop
 
-
-    def next(self):
+    async def next(self):
         n = self + self.step
-        if self.in_range(self.value):
+        if n.in_range(n):
             return n
         else:
             return None
 
-    def get(self):
-        return self.value
+    async def get(self):
+        return int(self)
 
 class _iterable_iterator[T](_iterator[T]):
-    def __init__(self, iterable:Iterable[T]):
-        super().__init__(-1)
-        self.iterable = iterable
-        self._last = -1
+    def __init__(self, value:int, iterable:Iterable[T]):
+        self._iterator = iter(iterable)
+        self._last = value
         self._last_value = None
 
-    def next(self):
-        self.value += 1
-        if self._last > self.value:
+    async def next(self):
+        n = self + 1
+        if n._last > self:
             raise TypeError("cannot reverse iterate with this iterator")
         try:
-            while self._last < self.value:
-                self._last_value = next(self.iterable)
-                self._last += 1
+            while n._last < n:
+                n._last_value = next(n._iterator)
+                n._last += 1
         except StopIteration:
             return None
-        return self
+        return n
 
-    def get(self):
+    async def get(self):
         return self._last_value
+
+class _collection_iterator[T](_iterable_iterator):
+    def __init__(self, value, iterable:Iterable):
+        super().__init__(value, iterable)
+        self._collection = iterable
+
+    def __contains__(self, item):
+        return item in self._collection
         
 class _sequence_iterator[T](_range_iterator[T]):
-    def __init__(self, start:int, stop:int, step:int, sequence:Sequence[T]):
-        super().__init__(start, stop, step)
+    def __init__(self, value:int, start:int, stop:int, step:int, sequence:Sequence[T]):
+        super().__init__(value, start, stop, step)
         self.sequence = sequence
 
-    def get(self):
-        return self.sequence[self.value]
+    def in_range(self, v:int):
+        if self.step >= 0:
+            return v >= self.start and v < min(self.stop, len(self.sequence))
+        else:
+            return v <= self.start and v > min(self.stop, len(self.sequence))
+
+    async def get(self):
+        return self.sequence[self]
 
 _IteratorTypeAttrs = utils.ScriptAttributeHandler[_iterator, Any]()
 @_IteratorTypeAttrs.enforce_child_attrs()
@@ -977,10 +955,16 @@ def make_iterator_type[X:_iterator](name:str, it_t:type[X], parent:type[_Iterato
 
 _RangeIteratorType = make_iterator_type("_RangeIteratorType", _range_iterator,_IteratorType)
 _RangeIteratorTypeAttrs = _RangeIteratorType.attrs
+_RangeIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} {int(value.inner)} from {value.inner.start} until {value.inner.stop} (step {value.inner.step})>")
 _IterableIteratorType = make_iterator_type("_IterableIteratorType", _iterable_iterator, _IteratorType)
 _IterableIteratorTypeAttrs = _IterableIteratorType.attrs
+_IterableIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} {int(value.inner)} : {utils.script_repr(script.wrap_python_value(value.inner._last_value))} of {utils.script_repr(script.wrap_python_value(value.inner._iterator))}>")
+_CollectionIteratorType = make_iterator_type("_CollectionIterator", _collection_iterator, _IterableIteratorType)
+_CollectionIteratorTypeAttrs = _CollectionIteratorType.attrs
+_CollectionIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} {int(value.inner)} : {utils.script_repr(script.wrap_python_value(value.inner._last_value))} of {script.wrap_python_type(type(value.inner._collection)).name}>")
 _SequenceIteratorType = make_iterator_type("_SequenceIteratorType", _sequence_iterator, _RangeIteratorType)
 _SequenceIteratorTypeAttrs = _SequenceIteratorType.attrs
+_SequenceIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} {int(value.inner)} from {value.inner.start} until {min(value.inner.stop, len(value.inner.sequence))} (step {value.inner.step}) of {script.wrap_python_type(type(value.inner.sequence)).name}>")
 
 _UUIDTypeAttrs = utils.ScriptAttributeHandler[uuid.UUID,Any](no_subscripting=True)
 @_UUIDTypeAttrs.enforce_child_attrs()
@@ -1295,6 +1279,7 @@ Map_readonly = _MapReadonlyType("_map_readonly", _rodict_wrapper, Map)
 Iterator = _IteratorType("iterator", _iterator, Integer)
 RangeIterator = _RangeIteratorType("range_iterator", _range_iterator, Iterator)
 IterableIterator = _IterableIteratorType("iterable_iterator", _iterable_iterator, Iterator)
+CollectionIterator = _CollectionIteratorType("collection_iterator", _collection_iterator, IterableIterator)
 SequenceIterator = _SequenceIteratorType("sequence_iterator", _sequence_iterator, RangeIterator)
 UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
 JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TYPE)
@@ -1513,7 +1498,9 @@ f_find = ScriptFunction()
 f_contains = ScriptFunction()
 f_iterate_over = ScriptFunction()
 f_iterate_over_range = ScriptFunction()
+f_get = ScriptFunction()
 f_next = ScriptFunction()
+f_reset = ScriptFunction()
 f_delete = ScriptFunction()
 f_delete_attribute = ScriptFunction()
 
@@ -1796,21 +1783,35 @@ def sequence_iter_contains(target:ScriptVariable[_sequence_iterator], value:Scri
 
 @f_contains.overload(("target", RangeIterator), ("value", [AnyType, NamePair]))
 def range_iter_contains(target:ScriptVariable[_range_iterator], value:ScriptVariable):
-    return target.get().inner.in_range(value.get().inner)
+    if target.get().inner.in_range(value.get().inner):
+        return true
+    else:
+        return false
+
+@f_contains.overload(("target", CollectionIterator), ("value", [AnyType, NamePair]))
+def collection_iter_contains(target:ScriptVariable[_collection_iterator], value:ScriptVariable):
+    if value.get().inner in target.get().inner:
+        return true
+    else:
+        return false
 
 _STR_ITERATE_STOP_DEFAULT = sys.maxsize
 @f_iterate_over.overload(("target", String), ("start", Integer, 0), ("stop", Integer, _STR_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
 def str_iterate_over(target:ScriptVariable[str], start:ScriptVariable[int], stop:ScriptVariable[int], step:ScriptVariable[int]):
-    return script.wrap_python_value(_sequence_iterator(start.get().inner, stop.get().inner, step.get().inner, target.get().inner))
+    v = start.get().inner
+    s = step.get().inner
+    return script.wrap_python_value(_sequence_iterator(v-s, v, stop.get().inner, s, target.get().inner))
 
 _LIST_ITERATE_STOP_DEFAULT = sys.maxsize
 @f_iterate_over.overload(("target", List), ("start", Integer, 0), ("stop", Integer, _LIST_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
 def list_literate_over(target:ScriptVariable[list], start:ScriptVariable[int], stop:ScriptVariable[int], step:ScriptVariable[int]):
-    return script.wrap_python_value(_sequence_iterator(start.get().inner, stop.get().inner, step.get().inner, target.get().inner))
+    v = start.get().inner
+    s = step.get().inner
+    return script.wrap_python_value(_sequence_iterator(v-s, v, stop.get().inner, s, target.get().inner))
 
 @f_iterate_over.overload(("target", Map))
 def map_literate_over(target:ScriptVariable[dict]):
-    return script.wrap_python_value(_iterable_iterator(target.get().inner.keys()))
+    return script.wrap_python_value(_collection_iterator(-1, target.get().inner.keys()))
 
 @f_iterate_over.overload(("target", Iterator))
 def iterator_iterate_over(target:ScriptVariable[_iterator]):
@@ -1818,7 +1819,13 @@ def iterator_iterate_over(target:ScriptVariable[_iterator]):
 
 @f_iterate_over_range.overload(("start", Integer, 0), ("stop", Integer, _LIST_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
 def iterate_over_range(start:ScriptVariable[int], stop:ScriptVariable[int], step:ScriptVariable[int]):
-    return script.wrap_python_value(_range_iterator(start.get().inner, stop.get().inner, step.get().inner))
+    v = start.get().inner
+    s = step.get().inner
+    return script.wrap_python_value(_range_iterator(v-s, v, stop.get().inner, s))
+
+@f_get.overload(("iterator", Iterator))
+async def iterator_get(iterator:ScriptVariable[_iterator]):
+    return script.wrap_python_value(await iterator.get().inner.get())
 
 @f_next.overload(("iterator", Iterator))
 async def iterator_next(iterator:ScriptVariable[_iterator]):
@@ -1839,7 +1846,6 @@ async def iterator_next(iterator:ScriptVariable[_iterator]):
 
 @f_next.overload(("iterator", Iterator), ("out", (AnyType, NamePair)))
 async def iterator_out_next(iterator:ScriptVariable[_iterator], out:ScriptVariable):
-    it = iterator.get().inner
     it = iterator.get().inner
     try:
         n = await it.next()
@@ -1862,7 +1868,21 @@ async def iterator_out_next(iterator:ScriptVariable[_iterator], out:ScriptVariab
         raise exceptions.TNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values")
     out.assign(script.wrap_python_value(v))
     return true
-    
+
+@f_reset.overload(("target", RangeIterator))
+def range_iterator_reset(target:ScriptVariable[_range_iterator]):
+    v = target.get().inner
+    n = script.wrap_python_value(v._copy(v.start-v.step))
+    target.assign(n)
+    return n
+
+@f_reset.overload(("target", CollectionIterator))
+def collection_iterator_reset(target:ScriptVariable[_collection_iterator]):
+    v = target.get().inner
+    n = script.wrap_python_value(type(v)(-1, v._collection))
+    target.assign(n)
+    return n
+
 @f_delete.overload(("name", String), pass_ctx=True)
 def delete_name(ctx:ScriptContext, name:ScriptVariable[str]):
     n = name.get().inner
@@ -1887,6 +1907,11 @@ def activate():
     script.DATA_TYPE_TABLE[NullType.inner] = NullType.init()
     script.DATA_TYPE_TABLE[List_readonly.inner] = List_readonly.init()
     script.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly.init()
+    utils.add_type(Iterator, constructor=False)
+    utils.add_type(RangeIterator, constructor=False)
+    utils.add_type(IterableIterator, constructor=False)
+    utils.add_type(CollectionIterator, constructor=False)
+    utils.add_type(SequenceIterator, constructor=False)
     utils.add_type(Duration, constructor=False)
     utils.add_type(ComplexDuration, constructor=False)
     for dt in _builtin_types:
@@ -1915,6 +1940,7 @@ def activate():
     utils.merge_function("iterate_over", f_iterate_over)
     utils.merge_function("iterate_over_range", f_iterate_over_range)
     utils.merge_function("next", f_next)
+    utils.merge_function("reset", f_reset)
     utils.merge_function("delete", f_delete)
     utils.merge_function("delete_attribute", f_delete_attribute)
 

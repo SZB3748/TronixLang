@@ -61,12 +61,19 @@ SCRIPT_FUNCTION_TABLE["test_annotations"] = f_test_annotations
 SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 
 raw = r"""
-loop i = iterate_over_range(0, 5); next(i) {
-    log("test", int(i))
+names = list("SZB", "Ein", "Third Guy");
+y = true;
+loop i = iterate_over(names); i < names.length {
+    if i == 2 and y {
+        reset(i);
+        y = false;
+    } else {
+        log(names[i], i);
+    }
+    i += 1;
 }
-log("test end")
-
 """
+
 
 s = Script(raw)
 

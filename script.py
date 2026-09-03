@@ -478,7 +478,7 @@ class step_stack_node:
         self.steps = steps
 
     def create_exp_step(self, new_ns_stackframe:bool=True):
-        exp = _step_expansion(self.steps, new_ns_stackframe=new_ns_stackframe)
+        exp = _fixed_step_expansion(self.steps, new_ns_stackframe=new_ns_stackframe)
         async def _step():
             return exp
         return _step
