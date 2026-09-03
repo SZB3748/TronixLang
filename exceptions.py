@@ -26,6 +26,36 @@ class TronixException(Exception):
 class DuplicateOverloadException(Exception):
     "Overload already exists in function."
 
+class TypeAnnotationException(Exception):
+    "Base class for type annotation exceptions."
+
+class InvalidTypeAnnotationException(TypeAnnotationException):
+    "Type annotation cannot be parsed."
+
+    def __init__(self, *args, annotation:str):
+        super().__init__(*args)
+        self.annotation = annotation
+
+class AnnotationUnknownTypeException(TypeAnnotationException):
+    "Type annotation specifies unknown type."
+
+    def __init__(self, *args, type_name:str):
+        super().__init__(*args)
+        self.type_name = type_name
+
+class AnnotationBadArgumentsException(TypeAnnotationException):
+    "Type annotation got bad arguments."
+
+class UnknownAnnotationException(Exception):
+    "Type annotation name is unknown."
+
+    def __init__(self, *args, name:str):
+        super().__init__(*args)
+        self.name = name
+
+class AnnotationSubscriptException(Exception):
+    "Type annotation has an issue with its [] or their contents."
+
 class _TronixRuntimeAssertion(Exception):
     "Assertion raised during script runtime."
 

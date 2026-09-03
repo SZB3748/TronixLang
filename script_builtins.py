@@ -541,7 +541,7 @@ class MapOf(script.ScriptTypeAnnotation):
     def parse(cls, data:str)->Self:
         parts = script.split_type_annotation_contents(data, ",")
         if len(parts) > 2:
-            ... #TODO error map_of only takes type annotations for key and value
+            raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} only takes arguments for key and value (got {len(parts)})")
         return cls(*(script.split_type_annotation_contents(part, "|") for part in parts))
     
     def __init__(self, key_types:ScriptDataType|ScriptTypeAnnotation|str|type|list[ScriptDataType|ScriptTypeAnnotation|str|type],
@@ -1363,7 +1363,7 @@ def close_file(file:ScriptVariable[_file_wrapper]):
 def list_append_value(target:ScriptVariable[list], value:ScriptVariable):
     v = target.get()
     if v.type.issubtype(List_readonly):
-        ... #TODO error list is read only
+        raise exceptions.TTypeError("given list is read-only")
     v.inner.append(value.get().inner)
     return v
 
@@ -1410,7 +1410,7 @@ def map_find_value(target:ScriptVariable[dict], value:ScriptVariable):
         if x.inner:
             return script.wrap_python_value(key)
     
-    #TODO error value not found
+    raise LookupError(utils.script_repr(v))
 
 @f_contains.overload(("target", String), ("value", String))
 def str_contains(target:ScriptVariable[str], value:ScriptVariable[str]):

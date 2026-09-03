@@ -93,20 +93,20 @@ RE_TYPE_ANNOTATION_START = re.compile(f"\\s*(P<name>{PATTERN_NAME})\\s*(?:(P<ann
 def parse_script_type_annotation(s:str):
     m = RE_TYPE_ANNOTATION_START.match(s)
     if m is None:
-        ... #TODO error invalid type annotation
+        raise exceptions.InvalidTypeAnnotationException("Could not parse type annotation", annotation=s)
     name = m["name"]
     annotation_start = m["annotation_start"]
     if annotation_start is None:
         t = name_to_type(name)
         if t is None:
-            ... #TODO error unknown type
+            raise exceptions.AnnotationUnknownTypeException(f"Unknown type: {name}", type_name=name)
         return t
-    end = s.find("]")
-    if end == -1 or s[end+1:].isspace():
-        ... #TODO error type annotation not closed properly
     at = _TYPE_ANNOTATIONS.get(name, None)
     if at is None:
-        ... #TODO error unknown annotation
+        raise exceptions.UnknownAnnotationException(f"Unknown annotation: {name}", name=name)
+    end = s.rfind("]")
+    if end == -1 or any(not c.isspace() for c in s[end+1:]):
+        raise exceptions.AnnotationSubscriptException("Type annotation was not closed")
     return at.parse(s[m.endpos:end-1])
 
 def split_type_annotation_contents(s:str, seps:str):
@@ -124,10 +124,10 @@ def split_type_annotation_contents(s:str, seps:str):
             sb_counter += 1
         elif c == "]":
             if sb_counter == 0:
-                ... #TODO error unexpected ]
+                raise exceptions.AnnotationSubscriptException("Type annotation has unexpected \"]\"")
             sb_counter -= 1
     if sb_counter:
-        ... #TODO error unclosed [
+        raise exceptions.AnnotationSubscriptException("Type annotation has unmatched \"[\"")
     last = s[start:i]
     if not last.strip():
         contents.append(last)
@@ -1623,12 +1623,12 @@ def _generate_subscript_steps(script:Script, op:_operation_node, lh, rh):
     pnode = op.onode
     assert isinstance(pnode, ParsingNodeSubscript), ""
     if not pnode.children:
-        ... #TODO error x[...] needs something for ..., got nothing
+        raise exceptions.TInvalidOperand("subscript takes a value or evaluable expression, got nothing")
     elif len(pnode.children) > 1:
-        ... #TODO error x[...] only needs one evaluable expression for ..., got n expressions
+        raise exceptions.TInvalidOperand(f"subscript does not take multiple expressions (got {len(pnode.children)})")
     expr = pnode.children[0]
     if not isinstance(expr, (ParsingNodeParentheses, ParsingNodeExpression)):
-        ... #TODO error x[...] requires an evaluable expression for ...
+        raise exceptions.TInvalidOperand("subcript contents must be a value or result in one")
     inner_step = _step_evaluation()
     script._generate_expression_steps(expr, rtv=inner_step)
 
@@ -1637,7 +1637,7 @@ def _generate_subscript_steps(script:Script, op:_operation_node, lh, rh):
         if isinstance(item_key, ScriptValue):
             item_key = ScriptVariable(item_key)
         elif not isinstance(item_key, ScriptVariable):
-            raise exceptions.TMustEvaluate(f"x[...] requires that ... evaluates but it resulted in no value")
+            raise exceptions.TMustEvaluate(f"subscript contents must evaluate but resulted in no value")
         return item_key
 
     async def _step():
