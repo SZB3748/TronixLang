@@ -61,21 +61,39 @@ SCRIPT_FUNCTION_TABLE["test_annotations"] = f_test_annotations
 SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 
 raw = r"""
-names = list("SZB", "Ein", "Third Guy");
-y = true;
-loop i = iterate_over(names); next(i) {
-    if i == 1 and y {
-        y = false;   
-        skip;
-    }
-    log(names[i], i);
+data = map(
+    test1: "a",
+    test2: "b",
+    test3: "c"
+);
+
+log("DIRECT ITER");
+loop i = iterate_over(data); next(i) {
+    log(i);
+}
+
+log("KEYS ITER");
+loop i = iterate_over(data.keys); next(i) {
+    log(i, get(i));
+}
+
+log("VALUES ITER");
+loop i = iterate_over(data.values); next(i) {
+    log(i, get(i));
+}
+
+log("ITEMS ITER");
+loop define item; i = iterate_over(data.items); next(i, item) {
+    log(i, item.key, item.value, item);
 }
 """
 
 
 s = Script(raw)
 
-print(s.raw)
+print("="*20)
+print(s.raw.strip())
+print("="*20)
 
 print("parsing")
 pstart = time.perf_counter_ns()
