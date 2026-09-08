@@ -22,7 +22,7 @@ PATTERN_NAME_VALUE_PAIR = f"(?:(?P<name_value_pair_name>{PATTERN_NAME})\\s*:)"
 PATTERN_FUNCTION_BEGIN = f"(?:(?P<function_name>{PATTERN_NAME})\\s*\\()"
 PATTERN_SUBSCRIPT_BEGIN = f"(?:\\[)"
 #PATTERN_ASSIGN_BEGIN = f"(?:(?P<assign_name>{PATTERN_NAME})\\s*=)"
-PATTERN_MAIN = f"\\s*(?:(?P<keyword>{PATTERN_KEYWORDS})|(?P<operator>{PATTERN_OPERATOR})|(?P<subscript>{PATTERN_SUBSCRIPT_BEGIN})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<name_value_pair>{PATTERN_NAME_VALUE_PAIR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
+PATTERN_MAIN = f"(?P<newline>\\n+)|\\s*(?:(?P<keyword>{PATTERN_KEYWORDS})|(?P<operator>{PATTERN_OPERATOR})|(?P<subscript>{PATTERN_SUBSCRIPT_BEGIN})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<name_value_pair>{PATTERN_NAME_VALUE_PAIR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
 
 RE_MAIN = re.compile(PATTERN_MAIN)
 
@@ -703,7 +703,12 @@ class Script:
                 if self.raw[i:].strip():
                     raise exceptions.TParsingException("unrecognizable syntax", target=(i, None))
                 return root
-            if (keyword := r["keyword"]) is not None:
+            if r["newline"] is not None:
+                fail_vardecl()
+                if isinstance(current, ParsingNodeExpression) and (current.parent is root or isinstance(current.parent, ParsingNodeCodeBlock)) and not isinstance(current.children[-1], ParsingNodeOperator):
+                    current = current.parent
+                i += r.end() - i
+            elif (keyword := r["keyword"]) is not None:
                 if look_nvpair():
                     raise exceptions.TUnexpectedKeyword(f"keyword not expected here", target=(i, r))
                 if keyword == "if":
@@ -922,7 +927,7 @@ class Script:
                 end_condition() or end_loop() or end_loopexpr()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)) or look_nvpair():
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
-                while current is not None:
+                while current is not root:
                     if isinstance(current, (ParsingNodeCodeBlock, ParsingNodeIfStatement, ParsingNodeLoopStatement)):
                         break
                     current = current.parent

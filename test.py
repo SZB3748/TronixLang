@@ -61,30 +61,20 @@ SCRIPT_FUNCTION_TABLE["test_annotations"] = f_test_annotations
 SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 
 raw = r"""
-data = map(
-    test1: "a",
-    test2: "b",
-    test3: "c"
-);
-
-log("DIRECT ITER");
-loop i = iterate_over(data); next(i) {
-    log(i);
+a = 
+1
+b = 2
+log(a, b, a+b)
+if a + b == 
+3 {
+    log(true)
+    c =
+    3
+    log(c)
 }
-
-log("KEYS ITER");
-loop i = iterate_over(data.keys); next(i) {
-    log(i, get(i));
-}
-
-log("VALUES ITER");
-loop i = iterate_over(data.values); next(i) {
-    log(i, get(i));
-}
-
-log("ITEMS ITER");
-loop define item; i = iterate_over(data.items); next(i, item) {
-    log(i, item.key, item.value, item);
+else if a + b 
+> 3 {
+    log(true, 2)
 }
 """
 
