@@ -115,6 +115,11 @@ class TInvalidOperand(TCompilationException):
 class TIncorrectIfStatement(TCompilationException):
     "Order of ifs/else ifs/elses is incorrect."
 
+class TIncorrentCatchStatement(TCompilationException):
+    "Catch statement does not have at most one name and one codeblock (is incorrent)."
+
+class TInvalidFStringEmbeddedExpression(TCompilationException):
+    "The given f-string embedded expression is not valid."
 
 
 class TRuntimeException(TronixException):

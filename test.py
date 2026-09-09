@@ -25,6 +25,9 @@ def test_async(ctx:ScriptContext):
     x = ctx.params[0].get()
     return _print_async(x)
 
+def test_exception(ctx:ScriptContext):
+    raise Exception("test")
+
 
 async def async_returner(ctx:ScriptContext):
     return wrap_python_value(ctx.params[0].get().inner + 1)
@@ -59,23 +62,10 @@ SCRIPT_FUNCTION_TABLE["async_returner"] = async_returner
 SCRIPT_FUNCTION_TABLE["await"] = lambda ctx: ctx.params[0].get()
 SCRIPT_FUNCTION_TABLE["test_annotations"] = f_test_annotations
 SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
+SCRIPT_FUNCTION_TABLE["test_exception"] = test_exception
 
 raw = r"""
-a = 
-1
-b = 2
-log(a, b, a+b)
-if a + b == 
-3 {
-    log(true)
-    c =
-    3
-    log(c)
-}
-else if a + b 
-> 3 {
-    log(true, 2)
-}
+
 """
 
 

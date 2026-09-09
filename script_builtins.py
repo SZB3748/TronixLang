@@ -23,7 +23,7 @@ class _TypeType(ScriptDataType[type]):
     attrs.entry("name").readonly(lambda o, n: script.wrap_python_value(script.DATA_TYPE_TABLE[o.inner].name))
     
     def repr(self, value):
-        return ScriptValue(String, f"<type {self.name} at {hex(id(value))}>")
+        return ScriptValue(String, f"<type {script.DATA_TYPE_TABLE[value.inner].name} at {hex(id(value))}>")
 
 _NullTypeAttrs = utils.ScriptAttributeHandler[None,Any](no_subscripting=True)
 @_NullTypeAttrs.enforce_child_attrs()

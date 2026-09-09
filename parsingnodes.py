@@ -29,6 +29,9 @@ class ParsingNodeValue(ParsingNode_Terminating):
         super().__init__(match, parent)
         self.value = value
 
+class ParsingNodeFString(ParsingNode):
+    pass
+
 class ParsingNodeParentheses(ParsingNode):
     pass
 
@@ -170,3 +173,6 @@ class ParsingNodeLoopControl(ParsingNode_Terminating):
         super().__init__(match, parent)
         self.flags = flags
         self.value = value
+
+class ParsingNodeCatchStatement(ParsingNode):
+    pass

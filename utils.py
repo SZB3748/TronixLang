@@ -139,7 +139,25 @@ class ScriptRunner:
 
     async def run_async(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
         s = self._prep(s, force_parse, force_compile)
-        control = None
+        control:script._step_control|None = None
+
+        async def run_step(step:Callable[[], Awaitable], exception_control:bool):
+            nonlocal control
+            if exception_control:
+                try:
+                    x = await step()
+                except Exception as e:
+                    x = script._step_control(script._STEP_CONTROL_BREAK|script._STEP_CONTROL_EXCEPTION, exc=e)
+            else:
+                x = await step()
+            if isinstance(x, script._step_control):
+                control = x
+            elif isinstance(x, script._step_expansion):
+                if x.new_ns_stackframe:
+                    s.stack = script.ns_stack({}, s.stack)
+                await _next(x)
+                if x.new_ns_stackframe:
+                    s.stack = s.stack.prev
 
         async def _next(steps:AsyncIterable[Callable[[], Awaitable]]|Iterable[Callable[[], Awaitable]]):
             nonlocal control
@@ -148,48 +166,28 @@ class ScriptRunner:
             except TypeError:
                 stepiter = iter(steps)
             if isinstance(stepiter, AsyncGenerator):
+                exc_ctrl = stepiter.handle_step_control if isinstance(stepiter, script._step_expansion) else True
                 try:
                     control = None
                     while True:
                         step = await stepiter.asend(control)
                         control = None
-                        x = await step()
-                        if isinstance(x, script._step_expansion):
-                            if x.new_ns_stackframe:
-                                s.stack = script.ns_stack({}, s.stack)
-                            await _next(x)
-                            if x.new_ns_stackframe:
-                                s.stack = s.stack.prev
-                        elif isinstance(x, script._step_control):
-                            control = x
+                        await run_step(step, exc_ctrl)
                 except StopAsyncIteration:
                     pass
             elif isinstance(stepiter, Generator):
+                exc_ctrl = stepiter.handle_step_control if isinstance(stepiter, script._step_expansion) else True
                 try:
                     control = None
                     while True:
-                        step = stepiter.send(control)
+                        step = stepiter.send(control, exc_ctrl)
                         control = None
-                        x = await step()
-                        if isinstance(x, script._step_expansion):
-                            if x.new_ns_stackframe:
-                                s.stack = script.ns_stack({}, s.stack)
-                            await _next(x)
-                            if x.new_ns_stackframe:
-                                s.stack = s.stack.prev
-                        elif isinstance(x, script._step_control):
-                            control = x
+                        await run_step(step, exc_ctrl)
                 except StopIteration:
                     pass
             else:
                 for step in stepiter:
-                    x = await step()
-                    if isinstance(x, script._step_expansion):
-                        if x.new_ns_stackframe:
-                            s.stack = script.ns_stack({}, s.stack)
-                        await _next(x)
-                        if x.new_ns_stackframe:
-                            s.stack = s.stack.prev
+                    await run_step(step, False)
 
         await self._run_cbs(s, self.script_start_cbs)
         await _next(s.steps)
