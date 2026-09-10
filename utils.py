@@ -513,7 +513,7 @@ class ScriptAttributeHandler[T,K]:
                 if not (attr is None or attr._get is None):
                     return attr._get(object, name)
                 p = p.parent
-            raise AttributeError(repr(name))
+            raise AttributeError(f"{object.type.name} object has no attribute {repr(name)}")
         return getattr
     
     def func_getitem(self):
@@ -537,7 +537,7 @@ class ScriptAttributeHandler[T,K]:
                     if attr._set is not None:
                         return attr._set(object, name, value)
                 p = p.parent
-            raise AttributeError(repr(name))
+            raise AttributeError(f"{object.type.name} object has no attribute {repr(name)}")
         return setattr
     
     def func_setitem(self):
@@ -561,7 +561,7 @@ class ScriptAttributeHandler[T,K]:
                     if attr._del is not None:
                         return attr._del(object, name)
                 p = p.parent
-            raise AttributeError(repr(name))
+            raise AttributeError(f"{object.type.name} object has no attribute {repr(name)}")
         return delattr
     
     def func_delitem(self):
