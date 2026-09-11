@@ -3,6 +3,7 @@ from .script import *
 from .utils import ScriptFunction
 
 import asyncio
+from datetime import datetime, timedelta
 import json
 import math
 import mimetypes
@@ -1128,6 +1129,62 @@ _SequenceIteratorType = make_iterator_type("_SequenceIteratorType", _sequence_it
 _SequenceIteratorTypeAttrs:utils.ScriptAttributeHandler[_sequence_iterator,Any] = _SequenceIteratorType.attrs
 _SequenceIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} [{int(value.inner)}] from {value.inner.start} until {min(value.inner.stop, len(value.inner.sequence))} (step {value.inner.step}) of {script.wrap_python_type(type(value.inner.sequence)).name}>")
 
+
+_DatetimeTypeAttrs = utils.ScriptAttributeHandler[datetime, Any]()
+@_DatetimeTypeAttrs.enforce_child_attrs()
+@_DatetimeTypeAttrs.attach
+class _DatetimeType(ScriptDataType[datetime]):
+
+    f_construct:ScriptFunction[Self] = ScriptFunction()
+    construct = f_construct
+
+    attrs = _DatetimeTypeAttrs
+    attrs.entry("year").readonly(lambda o,n: script.wrap_python_value(o.inner.year))
+    attrs.entry("month").readonly(lambda o,n: script.wrap_python_value(o.inner.month))
+    attrs.entry("day").readonly(lambda o,n: script.wrap_python_value(o.inner.day))
+    attrs.entry("hour").readonly(lambda o,n: script.wrap_python_value(o.inner.hour))
+    attrs.entry("minute").readonly(lambda o,n: script.wrap_python_value(o.inner.minute))
+    attrs.entry("second").readonly(lambda o,n: script.wrap_python_value(o.inner.second))
+    attrs.entry("microsecond").readonly(lambda o,n: script.wrap_python_value(o.inner.microsecond))
+
+    def repr(self, value):
+        attrs:list[tuple[str,float]] = [(name,v)for name in ("year","month","day","hour","minute","second","microsecond") if (v:=getattr(value.inner, name))]
+        return script.ScriptValue(String, f"<datetime {", ".join(f"{name}={v}" for name,v in attrs)}>")
+
+    def add(self, lhs, rhs):
+        r = rhs.get()
+        if r.type.issubtype(Duration):
+            x:durtypes._duration = r.inner
+            delta = timedelta(seconds=x.x * durtypes._unitspace_convert(durtypes._seconds_duration.FACTOR, durtypes._seconds_duration.POWER, x.FACTOR, x.POWER))
+        elif r.type.issubtype(ComplexDuration):
+            y:durtypes._complex_duration = r.inner
+            delta = timedelta(seconds=y.as_seconds().x)
+        else:
+            return super().add(lhs, rhs)
+        return script.wrap_python_value(lhs.get().inner + delta)
+
+    def sub(self, lhs, rhs):
+        r = rhs.get()
+        if r.type.issubtype(Duration):
+            x:durtypes._duration = r.inner
+            delta = timedelta(seconds=x.x * durtypes._unitspace_convert(durtypes._seconds_duration.FACTOR, durtypes._seconds_duration.POWER, x.FACTOR, x.POWER))
+        elif r.type.issubtype(ComplexDuration):
+            y:durtypes._complex_duration = r.inner
+            delta = timedelta(seconds=y.as_seconds().x)
+        elif r.type.issubtype(Datetime):
+            z:datetime = r.inner
+            return script.wrap_python_value(durtypes._complex_duration(secs=(lhs.get().inner - z).total_seconds()).simplify())
+        else:
+            return super().sub(lhs, rhs)
+        return script.wrap_python_value(lhs.get().inner - delta)
+
+    def iadd(self, lhs, rhs):
+        return self.add(lhs, rhs)
+
+    def isub(self, lhs, rhs):
+        return self.sub(lhs, rhs)
+    
+
 _UUIDTypeAttrs = utils.ScriptAttributeHandler[uuid.UUID,Any](no_subscripting=True)
 @_UUIDTypeAttrs.enforce_child_attrs()
 @_UUIDTypeAttrs.attach
@@ -1445,6 +1502,7 @@ IterableIterator = _IterableIteratorType("iterable_iterator", _iterable_iterator
 IteratorIterator = _IteratorIteratorType("iterator_iterator", _iterator_iterator, Iterator)
 CollectionIterator = _CollectionIteratorType("collection_iterator", _collection_iterator, IterableIterator)
 SequenceIterator = _SequenceIteratorType("sequence_iterator", _sequence_iterator, RangeIterator)
+Datetime = _DatetimeType("datetime", datetime, BASE_TYPE)
 UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
 JsonProxyRoot = _JsonProxyRootType("JsonRoot", json_proxy.JsonProxyRoot, BASE_TYPE)
 JsonNode = _JsonProxyNodeType("JsonNode", json_proxy.JsonProxyNode, BASE_TYPE)
@@ -1474,9 +1532,9 @@ false = script.ScriptValue(Bool, False)
 PI = script.ScriptValue(Float, math.pi)
 
 _builtin_types:list[ScriptDataType] = [
-    Type, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID, File,
-    Nanoseconds, Microseconds, Milliseconds, Seconds, Minutes, Hours, Weeks, Days,
-    Percent, Degrees, Radians
+    Type, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID, Datetime,
+    File, Nanoseconds, Microseconds, Milliseconds, Seconds, Minutes, Hours, Weeks,
+    Days, Percent, Degrees, Radians
 ]
 
 @_TypeType.f_construct.overload(("value", [AnyType, NamePair]))
@@ -1571,6 +1629,12 @@ def map_construct(self, *items:ScriptVariable[_pair|ScriptNameValuePair]):
         else:
             d[item.name] = item.value
     return script.ScriptValue(self, d)
+
+@_DatetimeType.f_construct.overload(("year", [Integer,Float]), ("month", [Integer,Float]), ("day", [Integer,Float]),
+                                    ("hour", [Integer,Float]), ("minute", [Integer,Float]), ("second", [Integer,Float]), ("microsecond", [Integer,Float]))
+def datetime_construct(self, year:ScriptVariable[int|float], month:ScriptVariable[int|float], day:ScriptVariable[int|float],
+                       hour:ScriptVariable[int|float], minute:ScriptVariable[int|float], second:ScriptVariable[int|float], microsecond:ScriptVariable[int|float]):
+    return script.ScriptValue(Datetime, datetime(year.get().inner, month.get().inner, day.get().inner, hour.get().inner, minute.get().inner, second.get().inner, microsecond.get().inner))
 
 @_UUIDType.f_construct.overload(("hex", String))
 def uuid_construct(self, hex:ScriptVariable[str]):
@@ -1677,6 +1741,7 @@ f_next = ScriptFunction()
 f_reset = ScriptFunction()
 f_delete = ScriptFunction()
 f_delete_attribute = ScriptFunction()
+f_now = ScriptFunction()
 
 @f_list_from.overload(("target", List))
 def list_from_list(target:ScriptVariable[list]):
@@ -2161,6 +2226,10 @@ def delete_attribute(value:ScriptVariable, name:ScriptVariable[str]):
     x = value.get()
     return x.type.delattr(x, name.get().inner)
 
+@f_now.overload()
+def function_now():
+    return script.wrap_python_value(datetime.now())
+
 def activate():
     if not mimetypes.inited:
         mimetypes.init()
@@ -2208,6 +2277,7 @@ def activate():
     utils.merge_function("reset", f_reset)
     utils.merge_function("delete", f_delete)
     utils.merge_function("delete_attribute", f_delete_attribute)
+    utils.merge_function("now", f_now)
 
 def deactivate():
     utils.remove_type(NullType)
@@ -2254,3 +2324,4 @@ def deactivate():
     utils.remove_function("reset", f_reset)
     utils.remove_function("delete", f_delete)
     utils.remove_function("delete_attribute", f_delete_attribute)
+    utils.remove_function("now", f_now)

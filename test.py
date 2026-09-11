@@ -65,8 +65,12 @@ SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 SCRIPT_FUNCTION_TABLE["test_exception"] = test_exception
 
 raw = r"""
-log(list_from(iterate_over_range(0, 6, 2)))
-log(list_from(iterate_over(map(a:1, b:2).items)))
+x = now()
+wait(5)
+y = now()
+log("x:", x)
+log("y:", y)
+log("y - x:", y-x)
 """
 
 
