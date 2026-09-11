@@ -65,7 +65,8 @@ SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 SCRIPT_FUNCTION_TABLE["test_exception"] = test_exception
 
 raw = r"""
-
+log(list_from(iterate_over_range(0, 6, 2)))
+log(list_from(iterate_over(map(a:1, b:2).items)))
 """
 
 
@@ -135,5 +136,6 @@ if __name__ == "__main__":
     runner.parse_trees[s._hash] = p
     
     asyncio.run(run_func(runner, s))
-
+else:
+    print(utils.print_parsetree(p, include_matches=False))
     

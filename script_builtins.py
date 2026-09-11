@@ -8,7 +8,7 @@ import math
 import mimetypes
 import string
 import sys
-from typing import BinaryIO, IO, ItemsView, Iterable, Sequence
+from typing import BinaryIO, IO, Iterable, Literal, Sequence
 import uuid
 
 _TypeTypeAttrs = utils.ScriptAttributeHandler[type,Any](no_subscripting=True)
@@ -150,29 +150,26 @@ class _NameValuePairType(ScriptDataType[ScriptNameValuePair]):
 
 class _pair[T,U]:
     def __init__(self, first:T, second:U):
-        self._pair:list[T,U] = [first,second]
+        self.first = first
+        self.second = second
 
-    def __getitem__(self, index):
-        return self._pair[index]
+    def __getitem__(self, index:int):
+        if index == 0 or index == -1:
+            return self.first
+        elif index == 1 or index == -2:
+            return self.second
+        raise IndexError("pair index out of range")
     
-    def __setitem__(self, index, value):
-        self._pair[index] = value
+    def __setitem__(self, index:int, value):
+        if index == 0 or index == -1:
+            self.first:T = value
+        elif index == 1 or index == -2:
+            self.second:U = value
+        raise IndexError("pair index out of range")
 
-    @property
-    def first(self):
-        return self._pair[0]
-    
-    @first.setter
-    def first(self, value:T):
-        self._pair[0] = value
-    
-    @property
-    def second(self):
-        return self._pair[1]
-    
-    @second.setter
-    def second(self, value:U):
-        self._pair[1] = value
+    def __iter__(self):
+        yield self.first
+        yield self.second
 
 _PairTypeAttrs = utils.ScriptAttributeHandler[_pair, int]()
 @_PairTypeAttrs.enforce_child_attrs()
@@ -506,7 +503,10 @@ class ListOf(script.ScriptTypeAnnotation):
     def __eq__(self, other):
         if isinstance(other, ListOf):
             return len(self._resolve_types()) == len(other._resolve_types()) and all(t in other.types for t in self.types)
-        return other == List
+        elif isinstance(other, script.ScriptDataType):
+            return other.issubtype(List)
+        else:
+            return False
     
     def compare(self, other):
         if isinstance(other, ScriptValue):
@@ -581,7 +581,10 @@ class MapOf(script.ScriptTypeAnnotation):
         if isinstance(other, MapOf):
             return (len(self._resolved_keys()) == len(other._resolved_keys()) and all(t in other.key_types for t in self.key_types) and
                     len(self._resolve_values()) == len(other._resolve_values()) and all(t in other.value_types for t in self.value_types))
-        return other == Map
+        elif isinstance(other, script.ScriptDataType):
+            return other.issubtype(Map)
+        else:
+            return False
     
     def compare(self, other):
         if isinstance(other, ScriptValue):
@@ -666,7 +669,10 @@ class PairOf(script.ScriptTypeAnnotation):
         if isinstance(other, PairOf):
             return (len(self._resolve_first()) == len(other._resolve_first()) and all(t in other.first_types for t in self.first_types) and
                     len(self._resolve_second()) == len(other._resolve_second()) and all(t in other.second_types for t in self.second_types))
-        return other == Pair
+        elif isinstance(other, script.ScriptDataType):
+            return other.issubtype(Pair)
+        else:
+            return False
 
     def compare(self, other):
         if isinstance(other, ScriptValue):
@@ -702,6 +708,74 @@ class PairOf(script.ScriptTypeAnnotation):
         firststr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_first())
         secondstr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_second())
         return f"{firststr}, {secondstr}"
+
+class IteratorOf(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "iterator_of"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, "|,")
+        return cls(*(script.parse_script_type_annotation(part) for part in parts))
+    
+    def __init__(self, *types:script.ScriptDataType|script.ScriptTypeAnnotation|type|str):
+        if not types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
+        self.types = list(types)
+        self._resolved = False
+
+    def _resolve_types(self):
+        if not self._resolved:
+            for i, t in enumerate(self.types):
+                if isinstance(t, str):
+                    self.types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.types[i] = script.wrap_python_type(t)
+            self._resolved = True
+        return self.types
+
+    def __eq__(self, other):
+        if isinstance(other, IteratorOf):
+            return len(self._resolve_types()) == len(other._resolve_types()) and all(t in other.types for t in self.types)
+        elif isinstance(other, script.ScriptDataType):
+            return other.issubtype(Iterator)
+        else:
+            return False
+    
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            if not other.type.issubtype(Iterator):
+                return False
+            assert isinstance(other.inner, _iterator)
+            it = other.inner
+        elif not isinstance(other, _iterator):
+            return False
+        else:
+            it = other
+        dts_l = []
+        ann:list[ScriptTypeAnnotation] = []
+        for t in self._resolve_types():
+            if isinstance(t, script.ScriptDataType):
+                dts_l.append(t.inner)
+            else:
+                ann.append(t)
+        dts:tuple[type,...] = tuple(dts_l)
+        
+        try:
+            it_iter = it.python_iterate()
+        except NotImplementedError as e:
+            return False
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if it_iter is NotImplemented or it_iter is None:
+            return False
+        for item in it_iter:
+            if not (dts and isinstance(item, dts) or any(a.compare(item) for a in ann)):
+                return False
+        return True
+    
+    def format_data(self):
+        return " | ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
     
 
 _ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_wrapper,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
@@ -743,6 +817,12 @@ class _iterator[T](int):
 
     async def get(self)->T:
         return NotImplemented
+
+    async def reset(self)->Self|None:
+        return NotImplemented
+
+    def python_iterate(self)->Iterable[T]:
+        raise NotImplementedError
 
     def __index__(self):
         return int(self)
@@ -888,6 +968,9 @@ class _range_iterator[T](_iterator[T]):
         else:
             return v <= self.start and v > self.stop
 
+    def python_iterate(self):
+        yield from range(self.start, self.stop, self.step)
+
     async def next(self):
         n = self + self.step
         if n.in_range(n):
@@ -897,6 +980,9 @@ class _range_iterator[T](_iterator[T]):
 
     async def get(self):
         return int(self)
+
+    async def reset(self):
+        return self._copy(self.start-self.step)
 
 class _iterable_iterator[T](_iterator[T]):
     def __init__(self, value:int, iterable:Iterable[T], callback:Callable[[Self, Self, Any], Any]|None=None):
@@ -924,14 +1010,67 @@ class _iterable_iterator[T](_iterator[T]):
     async def get(self):
         return self._last_value
 
+class _iterator_iterator[T](_iterator[T]):
+    def __init__(self, value:int, iterator:_iterator[T], stop:int, step:int):
+        self._last = iterator
+        self.start = iterator
+        self.stop = stop
+        self.step = step
+
+    def python_iterate(self):
+        x = self._last.python_iterate()
+        if x is None or x is NotImplemented:
+            return x
+        yield from x
+
+    def in_range(self, v:int):
+        if self.step >= 0:
+            return v >= self._last and v < self.stop
+        else:
+            return v <= self._last and v > self.stop
+
+    async def next(self):
+        n = self + self.step
+        if n == 0:
+            inn = await n._last.next()
+            if inn is None or inn is NotImplemented:
+                return inn
+            n._last = inn
+        else:
+            inn = n._last
+            for _ in range(self.step):
+                inn = await inn.next()
+                if inn is None or inn is NotImplemented:
+                    return inn
+            n._last = inn
+        if n.in_range(n):
+            return n
+        else:
+            return None
+
+    async def get(self):
+        return await self._last.get()
+
+    async def reset(self):
+        return type(self)(int(self.start), self.start, self.stop, self.step)
+
 class _collection_iterator[T](_iterable_iterator[T]):
-    def __init__(self, value, iterable:Iterable, callback:Callable[[Self, Any], T]|None=None):
-        super().__init__(value, iterable)
+    def __init__(self, value, iterable:Iterable, callback:Callable[[Self, Self, Any], T]|None=None):
+        super().__init__(value, iterable, callback)
         self._collection = iterable
-        self.callback = callback
 
     def __contains__(self, item):
         return item in self._collection
+
+    def python_iterate(self):
+        if self.callback is None:
+            yield from self._collection
+        else:
+            for x in self._collection:
+                yield self.callback(self, self, x)
+
+    async def reset(self):
+        return type(self)(-1, self._collection)
         
 class _sequence_iterator[T](_range_iterator[T]):
     def __init__(self, value:int, start:int, stop:int, step:int, sequence:Sequence[T]):
@@ -943,6 +1082,10 @@ class _sequence_iterator[T](_range_iterator[T]):
             return v >= self.start and v < min(self.stop, len(self.sequence))
         else:
             return v <= self.start and v > min(self.stop, len(self.sequence))
+
+    def python_iterate(self):
+        for i in range(self.start, self.stop, self.step):
+            yield self.sequence[i]
 
     async def get(self):
         if self >= 0 and self < len(self.sequence):
@@ -969,16 +1112,20 @@ def make_iterator_type[X:_iterator](name:str, it_t:type[X], parent:type[_Iterato
     return _subt
 
 _RangeIteratorType = make_iterator_type("_RangeIteratorType", _range_iterator, _IteratorType)
-_RangeIteratorTypeAttrs = _RangeIteratorType.attrs
+_RangeIteratorTypeAttrs:utils.ScriptAttributeHandler[_range_iterator,Any] = _RangeIteratorType.attrs
 _RangeIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} [{int(value.inner)}] from {value.inner.start} until {value.inner.stop} (step {value.inner.step})>")
 _IterableIteratorType = make_iterator_type("_IterableIteratorType", _iterable_iterator, _IteratorType)
-_IterableIteratorTypeAttrs = _IterableIteratorType.attrs
+_IterableIteratorTypeAttrs:utils.ScriptAttributeHandler[_iterable_iterator,Any] = _IterableIteratorType.attrs
 _IterableIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} [{int(value.inner)}] : {utils.script_repr(script.wrap_python_value(value.inner._last_value))} of {utils.script_repr(script.wrap_python_value(value.inner._iterator))}>")
+_IteratorIteratorType = make_iterator_type("_IteratorIteratorType", _iterator_iterator, _IteratorType)
+_IteratorIteratorTypeAttrs:utils.ScriptAttributeHandler[_iterator_iterator,Any] = _IteratorIteratorType.attrs
+_IteratorIteratorTypeAttrs.entry("inner").readonly(lambda o,n: script.wrap_python_value(o.inner._last))
+_IteratorIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} [{int(value.inner)}] over {utils.script_repr(script.wrap_python_value(value.inner._last))} (step {value.inner.step})>")
 _CollectionIteratorType = make_iterator_type("_CollectionIterator", _collection_iterator, _IterableIteratorType)
-_CollectionIteratorTypeAttrs = _CollectionIteratorType.attrs
+_CollectionIteratorTypeAttrs:utils.ScriptAttributeHandler[_collection_iterator,Any] = _CollectionIteratorType.attrs
 _CollectionIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} [{int(value.inner)}] : {utils.script_repr(script.wrap_python_value(value.inner._last_value))} of {script.wrap_python_type(type(value.inner._collection)).name}>")
 _SequenceIteratorType = make_iterator_type("_SequenceIteratorType", _sequence_iterator, _RangeIteratorType)
-_SequenceIteratorTypeAttrs = _SequenceIteratorType.attrs
+_SequenceIteratorTypeAttrs:utils.ScriptAttributeHandler[_sequence_iterator,Any] = _SequenceIteratorType.attrs
 _SequenceIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} [{int(value.inner)}] from {value.inner.start} until {min(value.inner.stop, len(value.inner.sequence))} (step {value.inner.step}) of {script.wrap_python_type(type(value.inner.sequence)).name}>")
 
 _UUIDTypeAttrs = utils.ScriptAttributeHandler[uuid.UUID,Any](no_subscripting=True)
@@ -1295,6 +1442,7 @@ Map_readonly = _MapReadonlyType("_map_readonly", _rodict_wrapper, Map)
 Iterator = _IteratorType("iterator", _iterator, Integer)
 RangeIterator = _RangeIteratorType("range_iterator", _range_iterator, Iterator)
 IterableIterator = _IterableIteratorType("iterable_iterator", _iterable_iterator, Iterator)
+IteratorIterator = _IteratorIteratorType("iterator_iterator", _iterator_iterator, Iterator)
 CollectionIterator = _CollectionIteratorType("collection_iterator", _collection_iterator, IterableIterator)
 SequenceIterator = _SequenceIteratorType("sequence_iterator", _sequence_iterator, RangeIterator)
 UUID = _UUIDType("UUID", uuid.UUID, BASE_TYPE)
@@ -1405,6 +1553,11 @@ def nvpair_construct(self, name:ScriptVariable[str], value:ScriptVariable):
 def pair_construct(self, first:ScriptVariable, second:ScriptVariable):
     return script.ScriptValue(self, _pair(first.get().inner, second.get().inner))
 
+@_PairType.f_construct.overload(("npair", NamePair))
+def pair_construct_nvpair(self:_PairType, npair:ScriptVariable[script.ScriptNameValuePair]):
+    nv = npair.get().inner
+    return script.ScriptValue(self, self.inner(nv.name, nv.value))
+
 @_ListType.f_construct.overload(dict(name="items", dtypes=[AnyType,NamePair], pack=True))
 def list_construct(self, *items:ScriptVariable):
     return script.ScriptValue(self, [v.get().inner for v in items])
@@ -1499,7 +1652,8 @@ def radians_construct_degrees(self:ScriptDataType[numunits.radians], value:Scrip
 def radians_construct_percent(self:ScriptDataType[numunits.radians], value:ScriptVariable[numunits.percent]):
     return script.ScriptValue(Radians, numunits.radians(value.get().inner.value * math.tau))
 
-
+f_list_from = ScriptFunction()
+f_map_from = ScriptFunction()
 f_isinstance = ScriptFunction()
 f_issubtype = ScriptFunction()
 f_has = ScriptFunction()
@@ -1523,6 +1677,81 @@ f_next = ScriptFunction()
 f_reset = ScriptFunction()
 f_delete = ScriptFunction()
 f_delete_attribute = ScriptFunction()
+
+@f_list_from.overload(("target", List))
+def list_from_list(target:ScriptVariable[list]):
+    return target.get()
+
+@f_list_from.overload(("target", Map))
+def list_from_map(target:ScriptVariable[dict]):
+    return script.wrap_python_value(list(target.get().inner.items()))
+
+@f_list_from.overload(("target", String))
+def list_from_string(target:ScriptVariable[str]):
+    return script.wrap_python_value(list(target.get().inner))
+
+@f_list_from.overload(("target", Iterator))
+async def list_from_iterator(target:ScriptVariable[_iterator]):
+    l = []
+    n = target.get().inner
+    while True:
+        try:
+            n = await n.next()
+        except NotImplementedError as e:
+            raise exceptions.TNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented") from e
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if n is NotImplemented:
+            raise exceptions.TNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented")
+        elif n is None:
+            break
+        try:
+            v = await n.get()
+        except NotImplementedError as e:
+            raise exceptions.TNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values") from e
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if v is NotImplemented:
+            raise exceptions.TNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values")
+        if isinstance(v, script.ScriptValue):
+            v = v.inner
+        l.append(v)
+    return script.wrap_python_value(l)
+
+@f_map_from.overload(("target", Map))
+def map_from_map(target:ScriptVariable[dict]):
+    return target.get()
+
+@f_map_from.overload(("target", ListOf(Pair, NamePair)))
+def map_from_list(target:ScriptVariable[list[_pair|ScriptNameValuePair]]):
+    return dict(tuple(x) for x in target.get().inner)
+
+@f_map_from.overload(("target", IteratorOf(Pair, NamePair)))
+async def map_from_iterator(target:ScriptVariable[_iterator[_pair|ScriptNameValuePair]]):
+    d = {}
+    n = target.get().inner
+    while True:
+        try:
+            n = await n.next()
+        except NotImplementedError as e:
+            raise exceptions.TNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented") from e
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if n is NotImplemented:
+            raise exceptions.TNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented")
+        elif n is None:
+            break
+        try:
+            v = await n.get()
+        except NotImplementedError as e:
+            raise exceptions.TNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values") from e
+        except Exception as e:
+            raise exceptions.wrap(e)
+        if v is NotImplemented:
+            raise exceptions.TNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values")
+        d[v[0]] = v[1]
+    return script.wrap_python_value(d)
+
 
 @f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
@@ -1837,6 +2066,14 @@ def map_literate_over(target:ScriptVariable[dict]):
 def iterator_iterate_over(target:ScriptVariable[_iterator]):
     return target.get()
 
+_ITERATOR_ITERATE_STOP_DEFAULT = sys.maxsize
+@f_iterate_over.overload(("start", Iterator), ("stop", Integer, _ITERATOR_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
+def iterate_over_iterator(start:ScriptVariable[_iterator], stop:ScriptVariable[int], step:ScriptVariable[int]):
+    v = start.get().inner
+    s = step.get().inner
+    return script.wrap_python_value(_iterator_iterator(-s, v, stop.get().inner, s))
+    
+
 @f_iterate_over_range.overload(("start", Integer, 0), ("stop", Integer, _LIST_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
 def iterate_over_range(start:ScriptVariable[int], stop:ScriptVariable[int], step:ScriptVariable[int]):
     v = start.get().inner
@@ -1883,23 +2120,26 @@ async def iterator_out_next(iterator:ScriptVariable[_iterator], out:ScriptVariab
         raise exceptions.TNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values") from e
     except Exception as e:
         raise exceptions.wrap(e)
-    if n is NotImplemented:
+    if v is NotImplemented:
         raise exceptions.TNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values")
     iterator.assign(script.wrap_python_value(n))
     out.assign(script.wrap_python_value(v))
     return true
 
-@f_reset.overload(("target", RangeIterator))
-def range_iterator_reset(target:ScriptVariable[_range_iterator]):
-    v = target.get().inner
-    n = script.wrap_python_value(v._copy(v.start-v.step))
-    target.assign(n)
-    return n
-
-@f_reset.overload(("target", CollectionIterator))
-def collection_iterator_reset(target:ScriptVariable[_collection_iterator]):
-    v = target.get().inner
-    n = script.wrap_python_value(type(v)(-1, v._collection))
+@f_reset.overload(("target", Iterator))
+async def iterator_reset(target:ScriptVariable[_iterator]):
+    it = target.get()
+    try:
+        n = await it.inner.reset()
+    except NotImplementedError as e:
+        raise exceptions.TNotImplemented(f"reset() for {utils.script_repr(it)} is not implemented") from e
+    except Exception as e:
+        raise exceptions.wrap(e)
+    if n is NotImplemented:
+        raise exceptions.TNotImplemented(f"reset() for {utils.script_repr(it)} is not implemented")
+    elif n is None:
+        return false
+    n = script.wrap_python_value()
     target.assign(n)
     return n
 
@@ -1931,6 +2171,7 @@ def activate():
     utils.add_type(Iterator, constructor=False)
     utils.add_type(RangeIterator, constructor=False)
     utils.add_type(IterableIterator, constructor=False)
+    utils.add_type(IteratorIterator, constructor=False)
     utils.add_type(CollectionIterator, constructor=False)
     utils.add_type(SequenceIterator, constructor=False)
     utils.add_type(Duration, constructor=False)
@@ -1943,6 +2184,8 @@ def activate():
     add_read_behavior("application/json", _read_file_json)
     add_write_behavior("application/json", _write_file_json)
 
+    utils.merge_function("list_from", f_list_from)
+    utils.merge_function("map_from", f_map_from)
     utils.merge_function("isinstance", f_isinstance)
     utils.merge_function("issubtype", f_issubtype)
     utils.merge_function("has", f_has)
@@ -1974,6 +2217,7 @@ def deactivate():
     utils.remove_type(Iterator)
     utils.remove_type(RangeIterator)
     utils.remove_type(IterableIterator)
+    utils.remove_type(IteratorIterator)
     utils.remove_type(CollectionIterator)
     utils.remove_type(SequenceIterator)
     utils.remove_type(Duration)
@@ -1986,6 +2230,8 @@ def deactivate():
     remove_read_behavior("application/json", _read_file_json)
     remove_write_behavior("application/json", _write_file_json)
 
+    utils.remove_function("list_from", f_list_from)
+    utils.remove_function("map_from", f_map_from)
     utils.remove_function("isinstance", f_isinstance)
     utils.remove_function("issubtype", f_issubtype)
     utils.remove_function("has", f_has)

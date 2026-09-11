@@ -75,8 +75,9 @@ class ScriptTypeAnnotation:
         raise NotImplementedError
 
     def __init_subclass__(cls):
-        assert not (cls.ANNOTATION_NAME is None or cls.ANNOTATION_NAME in _TYPE_ANNOTATIONS), f"{cls} must define a unique ANNOTATION_NAME"
-        _TYPE_ANNOTATIONS[cls.ANNOTATION_NAME] = cls
+        if cls.ANNOTATION_NAME is not None:
+            assert cls.ANNOTATION_NAME not in _TYPE_ANNOTATIONS, f"{cls} must define a unique ANNOTATION_NAME"
+            _TYPE_ANNOTATIONS[cls.ANNOTATION_NAME] = cls
 
     def __eq__(self, other:"ScriptDataType")->bool:
         raise NotImplementedError
@@ -319,6 +320,10 @@ class ScriptNameValuePair:
     def __init__(self, name:str, value):
         self.name = name
         self.value = value
+
+    def __iter__(self):
+        yield self.name
+        yield self.value
 
 Namespace = dict[str, ScriptVariable]
 
@@ -748,6 +753,10 @@ class Script:
             nonlocal current, enclstack, root
             if r["newline"] is not None:
                 fail_vardecl()
+                looknode = look_nvpair()
+                if looknode is not None:
+                    if looknode.value and not isinstance(looknode.children[-1], ParsingNodeOperator):
+                        current = looknode.parent
                 if isinstance(current, ParsingNodeExpression) and (current.parent is root or isinstance(current.parent, ParsingNodeCodeBlock)) and not isinstance(current.children[-1], ParsingNodeOperator):
                     current = current.parent
             elif (keyword := r["keyword"]) is not None:
@@ -758,7 +767,6 @@ class Script:
                     if isinstance(current, ParsingNodeConditionPair):
                         if current.condition is None and current.codeblock is None:
                             current.takes_condition = True
-                            i += r.end() - i
                             return
                         elif current.takes_condition == (current.condition is not None) and current.codeblock is not None:
                             current = current.parent.parent
@@ -842,7 +850,6 @@ class Script:
                 nvpair.children.append(nnode)
                 current.children.append(nvpair)
                 current = nvpair
-                end_nvpair()
             elif r["value"] is not None:
                 v_name = r["value_name"]
                 v_string = r["value_string"]
@@ -965,7 +972,6 @@ class Script:
                 current.children.append(node)
                 if escape_current:
                     current = current.parent
-                end_nvpair()
             elif (operator := r["operator"]) is not None:
                 fail_vardecl()
                 wrap_statement()
@@ -1015,16 +1021,16 @@ class Script:
                     raise exceptions.TEnclMismatch(f"closing {enclend} does not match opening {enclstack.c}", target=(i, r))
                 current = enclstack.basenode
                 enclstack = enclstack.prev
-                end_nvpair()
             elif r["comma"] is not None:
                 fail_vardecl()
-                if enclstack is not None or look_nvpair() and isinstance(enclstack.pnode, ParsingNodeFunction):
+                if enclstack is not None and isinstance(enclstack.pnode, ParsingNodeFunction):
                     current = enclstack.pnode
                     current.children.append(ParsingNodeComma(r, current))
                 else:
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
             elif r["semicolon"] is not None:
                 fail_vardecl()
+                end_nvpair()
                 end_condition() or end_loop() or end_catch() or end_loopexpr()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)) or look_nvpair():
                     raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))

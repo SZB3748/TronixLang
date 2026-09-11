@@ -3,6 +3,8 @@ from .script import *
 from . import script
 import asyncio
 from typing import AsyncGenerator, AsyncIterable, Generator, Iterable
+import xml.etree.ElementTree as ET
+import xml.dom.minidom
 
 from typing import Any, Callable
 
@@ -714,7 +716,10 @@ class ScriptFunctionSignature:
                             if _p.name == k:
                                 break
                         else:
-                            raise exceptions.TUnknownParameter(f"unknown parameter with given keyword argument name: {repr(k)}")
+                            if i == len(self.overloads)-1:
+                                raise exceptions.TUnknownParameter(f"unknown parameter with given keyword argument name: {repr(k)}")
+                            else:
+                                all_args_match = False
                         if _p.pack:
                             raise exceptions.TInvalidParameterOrder(f"cannot keyword assign to pack parameter ({repr(k)})")
                         ts = list(_p.resolve_types())
@@ -874,6 +879,25 @@ class _serialized_value:
         self.v = d["v"]
         self.type_str = isinstance(self.t, str)
 
+
+def parsetree_to_xml(p:ParsingNode, include_matches:bool=True):
+    d = p.__dict__.copy()
+    if not include_matches:
+        d.pop("match",None)
+    d.pop("parent",None)
+    children = d.pop("children",None)
+    elm = ET.Element(type(p).__name__, attrib={k:v if isinstance(v, str) else repr(v) for k,v in d.items()})
+    if children:
+        for child in children:
+            childelm  = parsetree_to_xml(child, include_matches)
+            elm.append(childelm)
+    return elm
+
+def print_parsetree(p:ParsingNode|ET.Element, include_matches:bool=True):
+    if not isinstance(p, ET.Element):
+        p = parsetree_to_xml(p, include_matches)
+    return xml.dom.minidom.parseString(ET.tostring(p)).toprettyxml(indent="    ")
+    
 
 SerializedNamespace = dict[str, _serialized_value]
 
