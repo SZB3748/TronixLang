@@ -1419,6 +1419,12 @@ class Script:
         async def _step():
             for condition_cb, block_cb in pairs:
                 v = await condition_cb()
+                if isinstance(v, _variable_access):
+                    x = await v.resolve(self.stack)
+                    if x is None:
+                        raise exceptions.TMissingName(f"{repr(v.path[0].value)} not found")
+                    else:
+                        v = x
                 if not isinstance(v, ScriptValue):
                     raise exceptions.TMustEvaluate("if statement condition must evaluate but resulted in no value")
                 if v.type.conv_bool(v).inner:
