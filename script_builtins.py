@@ -24,7 +24,21 @@ class _TypeType(ScriptDataType[type]):
     attrs.entry("name").readonly(lambda o, n: script.wrap_python_value(script.DATA_TYPE_TABLE[o.inner].name))
     
     def repr(self, value):
-        return ScriptValue(String, f"<type {script.DATA_TYPE_TABLE[value.inner].name} at {hex(id(value))}>")
+        return script.ScriptValue(String, f"<type {script.DATA_TYPE_TABLE[value.inner].name} at {hex(id(value))}>")
+
+_TypeAnnotationTypeAttrs = utils.ScriptAttributeHandler[ScriptTypeAnnotation,Any](no_subscripting=True)
+@_TypeAnnotationTypeAttrs.enforce_child_attrs()
+@_TypeAnnotationTypeAttrs.attach
+class _TypeAnnotationType(ScriptDataType[ScriptTypeAnnotation]):
+
+    f_construct:ScriptFunction[Self] = ScriptFunction()
+    construct = f_construct
+
+    attrs = _TypeAnnotationTypeAttrs
+    attrs.entry("annotation_name").readonly(lambda o,n: script.wrap_python_value(o.inner.ANNOTATION_NAME))
+
+    def repr(self, value):
+        return script.ScriptValue(String, f"<type annotation {value.inner.ANNOTATION_NAME}[{value.inner.format_data()}]>")
 
 _NullTypeAttrs = utils.ScriptAttributeHandler[None,Any](no_subscripting=True)
 @_NullTypeAttrs.enforce_child_attrs()
@@ -39,7 +53,7 @@ class _NullType(ScriptDataType[None]):
     attrs = _NullTypeAttrs
 
     def repr(self, value):
-        return ScriptValue(String, "null")
+        return script.ScriptValue(String, "null")
 
 _FloatTypeAttrs = utils.ScriptAttributeHandler[float,Any](no_subscripting=True)
 @_FloatTypeAttrs.enforce_child_attrs()
@@ -54,7 +68,7 @@ class _FloatType(ScriptDataType[float]):
     attrs.entry("is_integer").readonly(lambda o, n: script.wrap_python_value(o.inner.is_integer()))
 
     def repr(self, value):
-        return ScriptValue(String, repr(value.inner))
+        return script.ScriptValue(String, repr(value.inner))
 
 _IntegerTypeAttrs = utils.ScriptAttributeHandler[int,Any](no_subscripting=True)
 @_IntegerTypeAttrs.enforce_child_attrs()
@@ -67,7 +81,7 @@ class _IntegerType(ScriptDataType[int]):
     attrs = _IntegerTypeAttrs
 
     def repr(self, value):
-        return ScriptValue(String, repr(value.inner))
+        return script.ScriptValue(String, repr(value.inner))
 
 _StringTypeAttrs = utils.ScriptAttributeHandler[str, int]()
 @_StringTypeAttrs.enforce_child_attrs(*utils.ATTR_ATTACH_ATTRS)
@@ -100,7 +114,7 @@ class _StringType(ScriptDataType[str]):
         return value
 
     def repr(self, value):
-        return ScriptValue(String, repr(value.inner))
+        return script.ScriptValue(String, repr(value.inner))
 
 _BoolTypeAttrs = utils.ScriptAttributeHandler[bool,Any](_IntegerTypeAttrs)
 @_BoolTypeAttrs.enforce_child_attrs()
@@ -116,7 +130,7 @@ class _BoolType(ScriptDataType[bool]):
         return value
 
     def repr(self, value):
-        return ScriptValue(String, "true" if value.inner else "false")
+        return script.ScriptValue(String, "true" if value.inner else "false")
 
 _NameValuePairTypeAttrs = utils.ScriptAttributeHandler(no_subscripting=True)
 @_NameValuePairTypeAttrs.enforce_child_attrs()
@@ -147,7 +161,7 @@ class _NameValuePairType(ScriptDataType[ScriptNameValuePair]):
             sv = f"{repr(n)}:{vt.repr(v).inner}"
         else:
             sv = f"{n}:{vt.repr(script._convert_script_value(v)).inner}"
-        return ScriptValue(String, sv)
+        return script.ScriptValue(String, sv)
 
 class _pair[T,U]:
     def __init__(self, first:T, second:U):
@@ -200,7 +214,7 @@ class _PairType(ScriptDataType[_pair]):
     attrs.entry(1).itemgetter(utils.SimpleGetItem(1)).itemsetter(utils.SimpleSetItem(1)).itemnodel()
 
     def repr(self, value):
-        return ScriptValue(String, f"{self.name}({(fv:=wrap_python_value(value.inner.first)).type.repr(fv).inner}, {(sv:=wrap_python_value(value.inner.second)).type.repr(sv).inner})")
+        return script.ScriptValue(String, f"{self.name}({(fv:=wrap_python_value(value.inner.first)).type.repr(fv).inner}, {(sv:=wrap_python_value(value.inner.second)).type.repr(sv).inner})")
 
 def pair_alias_subtype(name:str, firstnames:list[str], secondnames:list[str], inner_type:type):
     _attrs = utils.ScriptAttributeHandler[inner_type,Any](_PairTypeAttrs)
@@ -263,7 +277,7 @@ class _ListType(ScriptDataType[list]):
         return x
 
     def repr(self, value):
-        return ScriptValue(String, f"{self.name}({", ".join((v:=wrap_python_value(x)).type.repr(v).inner for x in value.inner)})")
+        return script.ScriptValue(String, f"{self.name}({", ".join((v:=wrap_python_value(x)).type.repr(v).inner for x in value.inner)})")
     
 _MapTypeAttrs = utils.ScriptAttributeHandler[dict,Any](wildcard=utils.ScriptValueAttribute(""))
 @_MapTypeAttrs.enforce_child_attrs()
@@ -290,7 +304,7 @@ class _MapType(ScriptDataType[dict]):
     attrs.entry("items").readonly(lambda o, n: script.wrap_python_value(_collection_iterator(-1, o.inner.items(), lambda itold, it, v: _map_item_pair(*v))))
 
     def repr(self, value):
-        return ScriptValue(String, f"{self.name}({", ".join((k:=wrap_python_value(kx)).type.repr(k).inner + ": " + (v:=wrap_python_value(vx)).type.repr(v).inner for kx, vx in value.inner.items())})")
+        return script.ScriptValue(String, f"{self.name}({", ".join((k:=wrap_python_value(kx)).type.repr(k).inner + ": " + (v:=wrap_python_value(vx)).type.repr(v).inner for kx, vx in value.inner.items())})")
 
 class _rolist_wrapper[T](list[T]):
     def __init__(self, l:list[T]):
@@ -1482,8 +1496,22 @@ class _RadiansType(script.ScriptDataType[numunits.radians]):
     def repr(self, value):
         return script._convert_script_value(repr(value.inner))
 
+_FunctionParameterTypeAttrs = utils.ScriptAttributeHandler[utils.ScriptFunctionParam, Any]()
+@_FunctionParameterTypeAttrs.enforce_child_attrs()
+@_FunctionParameterTypeAttrs.attach
+class _FunctionParameterType(script.ScriptDataType[utils.ScriptFunctionParam]):
+
+    f_construct = construct = utils.ScriptFunction()
+
+    attrs = _FunctionParameterTypeAttrs
+    attrs.entry("name").readonly(utils.SimpleGetAttribute("name"))
+    attrs.entry("types").readonly(lambda o,n: _rolist_wrapper(list(o.inner.resolve_types())))
+    attrs.entry("default").readonly(lambda o,n: script.wrap_python_value(o.inner.default))
+    attrs.entry("pack").readonly(utils.SimpleGetAttribute("pack"))
+
 AnyType = BASE_TYPE
 Type = _TypeType("type", type, BASE_TYPE)
+TypeAnnotation = _TypeAnnotationType("type_annoation", ScriptTypeAnnotation, BASE_TYPE)
 Float = _FloatType("float", float, BASE_TYPE)
 Integer = _IntegerType("int", int, BASE_TYPE)
 String = _StringType("str", str, BASE_TYPE)
@@ -1520,6 +1548,7 @@ ComplexDuration = _ComplexDurationType("ComplexDuration", durtypes._complex_dura
 Percent = _PercentType("percent", numunits.percent, BASE_TYPE)
 Degrees = _DegreesType("degrees", numunits.degrees, BASE_TYPE)
 Radians = _RadiansType("radians", numunits.radians, BASE_TYPE)
+FunctionParameter = _FunctionParameterType("FunctionParameter", utils.ScriptFunctionParam, BASE_TYPE)
 
 _StringTypeAttrs.wildcard.itemgetter(BASE_TYPE.getitem).itemsetter(BASE_TYPE.setitem).itemdeleter(BASE_TYPE.delitem)
 _ListTypeAttrs.wildcard.itemgetter(List.getitem).itemsetter(List.setitem).itemdeleter(List.delitem)
@@ -1532,14 +1561,18 @@ false = script.ScriptValue(Bool, False)
 PI = script.ScriptValue(Float, math.pi)
 
 _builtin_types:list[ScriptDataType] = [
-    Type, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID, Datetime,
+    Type, TypeAnnotation, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID, Datetime,
     File, Nanoseconds, Microseconds, Milliseconds, Seconds, Minutes, Hours, Weeks,
-    Days, Percent, Degrees, Radians
+    Days, Percent, Degrees, Radians, FunctionParameter
 ]
 
 @_TypeType.f_construct.overload(("value", [AnyType, NamePair]))
 def type_construct(self, value:ScriptVariable):
     return script.ScriptValue(self, value.type().inner)
+
+@_TypeAnnotationType.f_construct.overload(dict(name="values", dtypes=[AnyType, NamePair], pack=True))
+def type_annotation_type_construct(self:_TypeAnnotationType, *values:ScriptVariable):
+    return script.wrap_python_value(self.inner(*(value.get().inner for value in values)))
 
 @_FloatType.f_construct.overload(("value", Float, 0.0))
 def float_construct_identity(self, value:ScriptVariable[float]):
@@ -1715,6 +1748,18 @@ def radians_construct_degrees(self:ScriptDataType[numunits.radians], value:Scrip
 @_RadiansType.f_construct.overload(("value", Percent))
 def radians_construct_percent(self:ScriptDataType[numunits.radians], value:ScriptVariable[numunits.percent]):
     return script.ScriptValue(Radians, numunits.radians(value.get().inner.value * math.tau))
+
+utils.ScriptFunctionParam()
+@_FunctionParameterType.f_construct.overload(("name", String), ("data_types", [String, Type, TypeAnnotation, ListOf(String, Type, TypeAnnotation)], ScriptValue(Type, object)), ("default", AnyType, utils._PARAM_NO_DEFAULT), ("pack", false))
+def FunctionParameter_construct(name:ScriptVariable[str], data_types:ScriptVariable[type|ScriptTypeAnnotation|str|list[type|ScriptTypeAnnotation|str]], default:ScriptVariable, pack:ScriptVariable[bool]):
+    dtv = data_types.get()
+    if dtv.type.issubtype(List):
+        dts = [script.DATA_TYPE_TABLE[dt] if isinstance(dt, type) else dt for dt in dtv.inner]
+    elif dtv.type.issubtype(Type):
+        dts = []
+    else:
+        dts = [dtv.inner]
+    return script.wrap_python_value(utils.ScriptFunctionParam(name.get().inner, dts, default.get().inner, pack.get().inner))
 
 f_list_from = ScriptFunction()
 f_map_from = ScriptFunction()
@@ -2231,6 +2276,7 @@ def function_now():
     return script.wrap_python_value(datetime.now())
 
 def activate():
+    global List_Of, Map_Of, Pair_Of, Iterator_Of
     if not mimetypes.inited:
         mimetypes.init()
     script.DATA_TYPE_TABLE[NullType.inner] = NullType.init()
@@ -2249,6 +2295,10 @@ def activate():
         utils.add_type(dt)
     utils.add_type(JsonProxyRoot, constructor=False)
     utils.add_type(JsonNode, constructor=False)
+    List_Of = utils.add_python_type(ListOf, override_names=ListOf.ANNOTATION_NAME)
+    Map_Of = utils.add_python_type(MapOf, override_names=MapOf.ANNOTATION_NAME)
+    Pair_Of = utils.add_python_type(PairOf, override_names=PairOf.ANNOTATION_NAME)
+    Iterator_Of = utils.add_python_type(IteratorOf, override_names=IteratorOf.ANNOTATION_NAME)
 
     add_read_behavior("application/json", _read_file_json)
     add_write_behavior("application/json", _write_file_json)

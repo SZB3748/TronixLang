@@ -79,6 +79,9 @@ class ScriptTypeAnnotation:
             assert cls.ANNOTATION_NAME not in _TYPE_ANNOTATIONS, f"{cls} must define a unique ANNOTATION_NAME"
             _TYPE_ANNOTATIONS[cls.ANNOTATION_NAME] = cls
 
+    def __init__(self, *values):
+        raise NotImplementedError
+
     def __eq__(self, other:"ScriptDataType")->bool:
         raise NotImplementedError
     
@@ -616,32 +619,28 @@ def wrap_python_value[T](value:T|ScriptValue[T]):
         v = ScriptValue[T](st, value)
     return v
 
-def wrap_python_type(t:type|ScriptDataType, update_table:bool=True):
+def _resolve_dynamic_type_creation(sup:type, mro:list[type], override_names:dict[str,str]|None)->tuple[ScriptDataType, type[ScriptDataType]]:
+    supt = DATA_TYPE_TABLE.get(sup, None)
+    if supt is None:
+        parent, super_t = _resolve_dynamic_type_creation(mro[0], mro[1:], override_names)
+        class _DynamicScriptDataType(super_t):
+            pass
+        n = sup.__name__
+        return _DynamicScriptDataType(n if override_names is None else override_names.get(sup, n), sup, parent).init(), super_t
+    else:
+        return supt, type(supt)
+
+def wrap_python_type(t:type|ScriptDataType, update_table:bool=True, override_names:str|dict[type,str]|None=None):
     if isinstance(t, ScriptDataType):
         return t
     st = DATA_TYPE_TABLE.get(t, None)
     if st is not None:
         return st
-    
-    st = tchain = ScriptDataType(t.__name__, t, None)
-    new_dts = {tchain}
-    for sup in t.mro():
-        supt = DATA_TYPE_TABLE.get(sup, None)
-        if supt is None:
-            class _DynamicScriptDataType(ScriptDataType):
-                pass
-            tchain.parent = _DynamicScriptDataType(sup.__name__, sup, None)
-            tchain = tchain.parent
-            new_dts.add(tchain)
-        else:
-            tchain.parent = supt
-            break
 
-    
-    tchain_l = list(st.parent_chain())
-    for parent in reversed(tchain_l):
-        if parent in new_dts:
-            parent.init()
+    n = t.__name__
+    new_dts = set()
+    mro = t.mro()
+    st = ScriptDataType(n if override_names is None else override_names if isinstance(override_names, str) else override_names.get(t, n), t, _resolve_dynamic_type_creation(mro[0], mro[1:], override_names if isinstance(override_names, dict) else None, new_dts))
 
     if update_table:
         DATA_TYPE_TABLE[t] = st.init()

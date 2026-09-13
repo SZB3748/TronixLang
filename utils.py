@@ -29,6 +29,15 @@ def add_type(dt:ScriptDataType, constructor:bool=True, init:bool=True):
         merge_function(dt.name, dt.construct)
     script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(dt, dt.inner))
 
+def add_python_type(t:type, constructor:bool=True, init:bool=True, override_names:str|dict[str,str]|None=None):
+    dt = script.wrap_python_type(t, override_names=override_names)
+    if init:
+        dt.init()
+    if constructor:
+        merge_function(dt.name, dt.construct)
+    script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(dt, dt.inner))
+    return dt
+
 def remove_type(dt:ScriptDataType):
     if dt is None:
         return
