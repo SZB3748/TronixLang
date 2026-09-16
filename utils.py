@@ -120,6 +120,23 @@ def remove_function(name:str, f:Callable[[ScriptContext], Any]|None=None):
             return None
         return f
 
+def add_global(name:str, value):
+    g = script.SCRIPT_GLOBAL_SCOPE.get(name, None)
+    v = script.wrap_python_value(value)
+    if g is None:
+        script.SCRIPT_GLOBAL_SCOPE[name] = script.ScriptVariable(v)
+    else:
+        g.assign(v)
+
+def remove_global(name:str, value):
+    g = script.SCRIPT_GLOBAL_SCOPE.get(name, None)
+    if g is None:
+        return
+    if isinstance(value, script.ScriptValue):
+        value = value.inner
+    if g.get().inner == value:
+        script.SCRIPT_GLOBAL_SCOPE.pop(name, None)
+
 class ScriptRunner:
     def __init__(self):
         self.parse_trees:dict[bytes, ParsingNode] = {}
@@ -680,6 +697,7 @@ class ScriptFunctionParamSet:
         for i, param in enumerate(self.params):
             if param.default is _PARAM_NO_DEFAULT and not param.pack: #is positional and not pack
                 if got_required_end: #after default args
+                    print(param.name)
                     raise exceptions.TInvalidParameterOrder("cannot have positional parameter after parameter with a default value")
             elif not got_required_end:
                 got_required_end = True
@@ -768,6 +786,37 @@ class ScriptFunctionSignature:
 
 ScriptFunctionParam_Like = ScriptFunctionParam|str|tuple[str]|tuple[str, str|ScriptDataType|ScriptTypeAnnotation|type|list[str|ScriptDataType|ScriptTypeAnnotation|type]]|dict[str]
 
+def _resolve_script_function_param_like(param:ScriptFunctionParam_Like, AnyType):
+    if isinstance(param, str):
+        param = ScriptFunctionParam(param, [AnyType])
+    elif isinstance(param, tuple):
+        if len(param) < 1:
+            raise ValueError(f"cannot construct script function parameter from data: {param}")
+        elif len(param) > 1:
+            tp = param[1]
+            if isinstance(tp, type):
+                tp = script.DATA_TYPE_TABLE[tp]
+            if isinstance(tp, (str, ScriptDataType, ScriptTypeAnnotation)):
+                param = (param[0], [tp], *param[2:])
+            elif isinstance(tp, list):
+                tl = []
+                for v in tp:
+                    if isinstance(v, type):
+                        v = script.DATA_TYPE_TABLE[v]
+                    elif not isinstance(v, (str, ScriptDataType, ScriptTypeAnnotation)):
+                        raise TypeError(f"script function parameter type union must be made of str, ScriptDataType, ScriptTypeAnnotation, or type, got: {type(v).__name__} {v}")
+                    tl.append(v)
+                param = (param[0], tl, *param[2:])
+            param = ScriptFunctionParam(*param)
+        else:
+            param = ScriptFunctionParam(param[0], [AnyType])
+    elif isinstance(param, dict):
+        param = ScriptFunctionParam(**param)
+    elif not isinstance(param, ScriptFunctionParam):
+        raise ValueError(f"cannot construct script function parameter from value: {param}")
+    return param
+
+
 class ScriptFunction[T]:
 
     def __init__(self):
@@ -801,34 +850,7 @@ class ScriptFunction[T]:
                 plist = []
                 AnyType = script.DATA_TYPE_TABLE[object]
                 for p in params:
-                    if isinstance(p, str):
-                        p = ScriptFunctionParam(p, [AnyType])
-                    elif isinstance(p, tuple):
-                        if len(p) < 1:
-                            raise ValueError(f"cannot construct script function parameter from data: {p}")
-                        elif len(p) > 1:
-                            tp = p[1]
-                            if isinstance(tp, type):
-                                tp = script.DATA_TYPE_TABLE[tp]
-                            if isinstance(tp, (str, ScriptDataType, ScriptTypeAnnotation)):
-                                p = (p[0], [tp], *p[2:])
-                            elif isinstance(tp, list):
-                                tl = []
-                                for v in tp:
-                                    if isinstance(v, type):
-                                        v = script.DATA_TYPE_TABLE[v]
-                                    elif not isinstance(v, (str, ScriptDataType, ScriptTypeAnnotation)):
-                                        raise TypeError(f"script function parameter type union must be made of str, ScriptDataType, ScriptTypeAnnotation, or type, got: {type(v).__name__} {v}")
-                                    tl.append(v)
-                                p = (p[0], tl, *p[2:])
-                            p = ScriptFunctionParam(*p)
-                        else:
-                            p = ScriptFunctionParam(p[0], [AnyType])
-                    elif isinstance(p, dict):
-                        p = ScriptFunctionParam(**p)
-                    elif not isinstance(p, ScriptFunctionParam):
-                        raise ValueError(f"cannot construct script function parameter from value: {p}")
-                    plist.append(p)  
+                    plist.append(_resolve_script_function_param_like(p, AnyType))
                 self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx), cb, priority=priority)
             return cb
         return decor
@@ -857,6 +879,173 @@ class BoundScriptFunction[T](ScriptFunction[T]):
             return cb(self.instance, ctx, *args, **kwargs)
         else:
             return cb(self.instance, *args, **kwargs)
+
+_TRAIT_EXTRA_NAMES = "name", "dtypes", "default", "pack"
+
+class ScriptTrait(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "trait"
+
+    @classmethod
+    def parse(cls, data): #trait[name, 0, (...), extra1, extra2, (extra3)]
+        parts = script.split_type_annotation_contents(data, ",")
+        if len(parts) < 1:
+            raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} takes at least 1 arguments for the trait name")
+        fname = parts[0].strip()
+        if not script.RE_NAME.match(fname):
+            raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} argument 1 must be a valid function name")
+        if len(parts) < 2:
+            return cls(fname, 0, [script.BASE_TYPE])
+        index_s = parts[1].strip()
+        if index_s:
+            if not script.RE_INTEGER_SIGNED.match(index_s):
+                raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} argument 2 takes an integer")
+            index = int(index_s)
+        else:
+            index = 0
+        if len(parts) < 3:
+            return cls(fname, index, [script.BASE_TYPE])
+
+        tcs_s = parts[2].strip()
+        if tcs_s:
+            if tcs_s[0] in script._TA_ENCL_STARTS:
+                tcs_parts = script.split_type_annotation_contents(tcs_s[1:-1], ",|")
+                tcs = [script.parse_script_type_annotation(part) for part in tcs_parts]
+            else:
+                tcs = [script.parse_script_type_annotation(tcs_s)]
+        else:
+            tcs = [script.BASE_TYPE]
+
+        extra = []
+        for i, part in enumerate(parts[3:]):
+            if not part:
+                continue
+            if part[0] in script._TA_ENCL_STARTS:
+                exp_parts = script.split_type_annotation_contents(part[1:-1], ",")
+                if not exp_parts:
+                    continue
+                d = {}
+                name = exp_parts[0].strip()
+                if name:
+                    if not script.RE_NAME.match(name):
+                        raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} argument {4+i}: element 1 must be blank or a valid parameter name")
+                    d["name"] = name
+                if len(exp_parts) > 1:
+                    dts_s = exp_parts[1].strip()
+                    if dts_s:
+                        if dts_s[0] in script._TA_ENCL_STARTS:
+                            dts_parts = script.split_type_annotation_contents(dts_s[1:-1], ",|")
+                            dts = [script.parse_script_type_annotation(part) for part in dts_parts]
+                        else:
+                            dts = [script.parse_script_type_annotation(dts)]
+                        d["dts"] = dts
+                    if len(exp_parts) > 2:
+                        dfts_s = exp_parts[2].strip()
+                        if dts_s:
+                            if dfts_s[0] in script._TA_ENCL_STARTS:
+                                dfts_parts = script.split_type_annotation_contents(dfts_s[1:-1], ",|")
+                                dfts = [script.parse_script_type_annotation(part) for part in dfts_parts]
+                            else:
+                                dfts = [script.parse_script_type_annotation(dfts)]
+                            d["default"] = dfts
+                        if len(exp_parts) > 4:
+                            raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} argument {4+i}: does not take more than 4 elements")
+                        elif len(exp_parts) == 4:
+                            pack_s = exp_parts[3].strip()
+                            if pack_s  == "true":
+                                d["pack"] = True
+                            elif pack_s == "false":
+                                d["pack"] = False
+                            else:
+                                raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} argument {4+i}: element 4 must be true or false")
+                if d:
+                    extra.append(d)
+            else:
+                extra.append(dict(dtypes=script.parse_script_type_annotation(part)))
+
+            return cls(fname, index, tcs, *extra)
+        
+
+    def __init__(self, func_name:str, target_index:int, target_type_constraints:list[ScriptDataType|ScriptTypeAnnotation],
+                 *extra:dict[str]):
+        self.func_name = func_name
+        self.target_index = target_index
+        self.target_type_constraints = target_type_constraints
+        self.extra = list(extra)
+
+    def __eq__(self, other):
+        if isinstance(other, ScriptTrait):
+            return (self.func_name == other.func_name and
+                    self.target_index == other.target_index and
+                    self.target_type_constraints == other.target_type_constraints and
+                    self.extra == other.extra)
+        return False
+
+    def _comp_ex(self, p:ScriptFunctionParam, ex:dict[str]):
+        if (name := ex.get("name")) is not None:
+            if name != p.name:
+                return False
+        if (dts:=ex.get("dts")) is not None:
+            pdts = list(p.resolve_types())
+            if not any(t in pdts for t in dts):
+                return False
+        if (default:=ex.get("default")) is not None:
+            if p.default is _PARAM_NO_DEFAULT:
+                return False
+            dv = script.wrap_python_value(p.default)
+            if not dv.type.issubtype(*default):
+                return False
+        if (pack:=ex.get("pack")):
+            if pack != p.pack:
+                return False
+        return True
+
+    def compare(self, other):
+        func = script.SCRIPT_FUNCTION_TABLE.get(self.func_name,None)
+        if not isinstance(func, ScriptFunction):
+            return False
+        other = script.wrap_python_value(other)
+        if not other.isinstance(*self.target_type_constraints):
+            return False
+        for overload in func.signature.overloads:
+            if self.target_index >= len(overload.params) or self.target_index*-1 > len(overload.params):
+                continue
+            param = overload.params[self.target_index]
+            if other.isinstance(*param.resolve_types()):
+                excomps:set[int] = set()
+                for p in overload.params:
+                    if p is param:
+                        continue
+                    for i, ex in enumerate(self.extra):
+                        if self._comp_ex(p, ex):
+                            excomps.add(i)
+                if len(excomps) == len(self.extra):
+                    return True
+        return False
+
+    def format_data(self):
+        tcs = [t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self.target_type_constraints]
+        extra = [f"({", ".join("" if (v:=ex.get(name,None)) is None else v for name in _TRAIT_EXTRA_NAMES)})" for ex in self.extra]
+        return f"{self.ANNOTATION_NAME}[{self.func_name}, {self.target_index},{f" ({", ".join(tcs)})," if tcs else ""}{f" {", ".join(extra)}" if extra else ""}]"
+
+    def merge_function(self, f:ScriptFunction):
+        for overload in f.signature.overloads:
+            if self.target_index >= len(overload.params) or self.target_index*-1 > len(overload.params):
+                continue
+            param = overload.params[self.target_index]
+            dts = list(param.resolve_types())
+            if any(dt.issubtype(*self.target_type_constraints) for dt in dts):
+                excomps:set[int] = set()
+                for p in overload.params:
+                    if p is param:
+                        continue
+                    for i, ex in enumerate(self.extra):
+                        if self._comp_ex(p, ex):
+                            excomps.add(i)
+                if len(excomps) == len(self.extra):
+                    merge_function(self.func_name, f)
+        raise exceptions.TraitMergeException(f"Function does not meet the requirements of this triat.")
+
         
 class _serialized_value:
     @classmethod

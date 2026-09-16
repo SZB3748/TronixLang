@@ -1,5 +1,5 @@
-from . import exceptions, duration_types as durtypes, json_proxy, number_units as numunits, script, utils
 from .script import *
+from . import exceptions, duration_types as durtypes, json_proxy, number_units as numunits, script, utils
 from .utils import ScriptFunction
 
 import asyncio
@@ -792,6 +792,110 @@ class IteratorOf(script.ScriptTypeAnnotation):
     def format_data(self):
         return " | ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
     
+
+class NotType(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "not_type"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, ",|")
+        return cls(*(script.parse_script_type_annotation(part) for part in parts))
+
+    def __init__(self, *types:script.ScriptDataType|script.ScriptTypeAnnotation|type|str):
+        if not types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
+        self.types = list(types)
+        self._resolved = False
+
+    def _resolve_types(self)->list[ScriptDataType|ScriptTypeAnnotation]:
+        if not self._resolved:
+            for i, t in enumerate(self.types):
+                if isinstance(t, str):
+                    self.types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.types[i] = script.wrap_python_type(t)
+            self._resolved = True
+        return self.types
+
+    def __eq__(self, other):
+        if isinstance(other, NotType):
+            return len(self._resolve_types()) == len(other._resolve_types()) and all(t in other.types for t in self.types)
+        elif isinstance(other, script.ScriptDataType):
+            return not other.issubtype(*self._resolve_types())
+        elif isinstance(other, ScriptTypeAnnotation):
+            return all(other != t for t in self._resolve_types())
+        else:
+            return False
+
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            x = other.inner
+        else:
+            x = other
+        for t in self._resolve_types():
+            if isinstance(t, script.ScriptDataType):
+                if isinstance(x, t.inner):
+                    return False
+            elif t.compare(x):
+                return False
+        return True
+
+    def format_data(self):
+        return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+
+class AllTypes(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "all_types"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, ",")
+        return cls(*(script.parse_script_type_annotation(part) for part in parts))
+
+    def __init__(self, *types:script.ScriptDataType|script.ScriptTypeAnnotation|type|str):
+        if not types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
+        self.types = list(types)
+        self._resolved = False
+
+    def _resolve_types(self)->list[ScriptDataType|ScriptTypeAnnotation]:
+        if not self._resolved:
+            for i, t in enumerate(self.types):
+                if isinstance(t, str):
+                    self.types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.types[i] = script.wrap_python_type(t)
+            self._resolved = True
+        return self.types
+
+    def __eq__(self, other):
+        if isinstance(other, AllTypes):
+            return len(self._resolve_types()) == len(other._resolve_types()) and all(t in other.types for t in self.types)
+        elif isinstance(other, script.ScriptDataType):
+            return all(other.issubtype(t) for t in self._resolve_types())
+        elif isinstance(other, ScriptTypeAnnotation):
+            return all(other == t for t in self._resolve_types())
+        else:
+            return False
+
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            x = other.inner
+        else:
+            x = other
+        for t in self._resolve_types():
+            if isinstance(t, script.ScriptDataType):
+                if not isinstance(x, t.inner):
+                    return False
+            elif not t.compare(x):
+                return False
+        return True
+
+    def format_data(self):
+        return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+
+
 
 _ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_wrapper,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
 @_ListReadonlyTypeAttrs.enforce_child_attrs()
@@ -1749,8 +1853,8 @@ def radians_construct_degrees(self:ScriptDataType[numunits.radians], value:Scrip
 def radians_construct_percent(self:ScriptDataType[numunits.radians], value:ScriptVariable[numunits.percent]):
     return script.ScriptValue(Radians, numunits.radians(value.get().inner.value * math.tau))
 
-utils.ScriptFunctionParam()
-@_FunctionParameterType.f_construct.overload(("name", String), ("data_types", [String, Type, TypeAnnotation, ListOf(String, Type, TypeAnnotation)], ScriptValue(Type, object)), ("default", AnyType, utils._PARAM_NO_DEFAULT), ("pack", false))
+_FUNC_PARAM_NO_DEFAULT = object()
+@_FunctionParameterType.f_construct.overload(("name", String), ("data_types", [String, Type, TypeAnnotation, ListOf(String, Type, TypeAnnotation)], ScriptValue(Type, object)), ("default", AnyType, _FUNC_PARAM_NO_DEFAULT), ("pack", Bool, false))
 def FunctionParameter_construct(name:ScriptVariable[str], data_types:ScriptVariable[type|ScriptTypeAnnotation|str|list[type|ScriptTypeAnnotation|str]], default:ScriptVariable, pack:ScriptVariable[bool]):
     dtv = data_types.get()
     if dtv.type.issubtype(List):
@@ -1759,11 +1863,15 @@ def FunctionParameter_construct(name:ScriptVariable[str], data_types:ScriptVaria
         dts = []
     else:
         dts = [dtv.inner]
-    return script.wrap_python_value(utils.ScriptFunctionParam(name.get().inner, dts, default.get().inner, pack.get().inner))
+    return script.wrap_python_value(utils.ScriptFunctionParam(
+        name.get().inner, dts,
+        utils._PARAM_NO_DEFAULT if (df := default.get().inner) is _FUNC_PARAM_NO_DEFAULT else df,
+        pack.get().inner
+    ))
 
 f_list_from = ScriptFunction()
 f_map_from = ScriptFunction()
-f_isinstance = ScriptFunction()
+f_is = ScriptFunction()
 f_issubtype = ScriptFunction()
 f_has = ScriptFunction()
 f_hasfunc = ScriptFunction()
@@ -1787,6 +1895,13 @@ f_reset = ScriptFunction()
 f_delete = ScriptFunction()
 f_delete_attribute = ScriptFunction()
 f_now = ScriptFunction()
+
+trait_Appendable = utils.ScriptTrait("append", 0, [AnyType], dict(dtypes=[AnyType]))
+trait_Container = utils.ScriptTrait("contains", 0, [AnyType], dict(dtypes=[AnyType]))
+trait_Iterable = utils.ScriptTrait("iterate_over", 0, [AnyType])
+trait_CanFind = utils.ScriptTrait("find", 0, [AnyType], dict(dtypes=[AnyType]))
+trait_CanDelete = utils.ScriptTrait("delete", 0, [AnyType], dict(dtypes=[AnyType]))
+
 
 @f_list_from.overload(("target", List))
 def list_from_list(target:ScriptVariable[list]):
@@ -1863,21 +1978,13 @@ async def map_from_iterator(target:ScriptVariable[_iterator[_pair|ScriptNameValu
     return script.wrap_python_value(d)
 
 
-@f_isinstance.overload(("value", [AnyType,NamePair]), ("type", Type))
-def function_isinstance(value:ScriptVariable, t:ScriptVariable[type]):
+@f_is.overload(("value", [AnyType,NamePair]), ("type", Type))
+def function_is(value:ScriptVariable, t:ScriptVariable[type]):
     return ScriptValue(Bool, value.type().issubtype(script.DATA_TYPE_TABLE[t.get().inner]))
 
-@f_isinstance.overload(("value", [AnyType,NamePair]), dict(name="types", dtypes=[Type], pack=True))
-def function_isinstance2(value:ScriptVariable, *types:ScriptVariable[type]):
-    return ScriptValue(Bool, value.type().issubtype(*(script.DATA_TYPE_TABLE[vr.get().inner] for vr in types)))
-
-@f_isinstance.overload(("x", Type), ("type", Type))
-def function_isinstance(x:ScriptVariable[type], t:ScriptVariable[type]):
-    return ScriptValue(Bool, script.DATA_TYPE_TABLE[x.get().inner].issubtype(script.DATA_TYPE_TABLE[t.get().inner]))
-
-@f_isinstance.overload(("x", Type), dict(name="types", dtypes=[Type], pack=True))
-def function_isinstance2(x:ScriptVariable[type], *types:ScriptVariable[type]):
-    return ScriptValue(Bool, script.DATA_TYPE_TABLE[x.get().inner].issubtype(*(script.DATA_TYPE_TABLE[vr.get().inner] for vr in types)))
+@f_is.overload(("value", [AnyType,NamePair]), ("type", TypeAnnotation))
+def function_is_annotation(value:ScriptVariable, t:ScriptVariable[ScriptTypeAnnotation]):
+    return ScriptValue(Bool, value.get().isinstance(t.get().inner))
 
 @f_has.overload(("name", String), pass_ctx=True)
 def function_has(ctx:ScriptContext, name:ScriptVariable[str]):
@@ -2276,7 +2383,7 @@ def function_now():
     return script.wrap_python_value(datetime.now())
 
 def activate():
-    global List_Of, Map_Of, Pair_Of, Iterator_Of
+    global Trait, List_Of, Map_Of, Pair_Of, Iterator_Of, Not_Type, All_Types
     if not mimetypes.inited:
         mimetypes.init()
     script.DATA_TYPE_TABLE[NullType.inner] = NullType.init()
@@ -2295,17 +2402,20 @@ def activate():
         utils.add_type(dt)
     utils.add_type(JsonProxyRoot, constructor=False)
     utils.add_type(JsonNode, constructor=False)
+    Trait = utils.add_python_type(utils.ScriptTrait, override_names=utils.ScriptTrait.ANNOTATION_NAME)
     List_Of = utils.add_python_type(ListOf, override_names=ListOf.ANNOTATION_NAME)
     Map_Of = utils.add_python_type(MapOf, override_names=MapOf.ANNOTATION_NAME)
     Pair_Of = utils.add_python_type(PairOf, override_names=PairOf.ANNOTATION_NAME)
     Iterator_Of = utils.add_python_type(IteratorOf, override_names=IteratorOf.ANNOTATION_NAME)
+    Not_Type = utils.add_python_type(NotType, override_names=NotType.ANNOTATION_NAME)
+    All_Types = utils.add_python_type(AllTypes, override_names=AllTypes.ANNOTATION_NAME)
 
     add_read_behavior("application/json", _read_file_json)
     add_write_behavior("application/json", _write_file_json)
 
     utils.merge_function("list_from", f_list_from)
     utils.merge_function("map_from", f_map_from)
-    utils.merge_function("isinstance", f_isinstance)
+    utils.merge_function("is", f_is)
     utils.merge_function("issubtype", f_issubtype)
     utils.merge_function("has", f_has)
     utils.merge_function("hasfunc", f_hasfunc)
@@ -2329,6 +2439,12 @@ def activate():
     utils.merge_function("delete_attribute", f_delete_attribute)
     utils.merge_function("now", f_now)
 
+    utils.add_global("Appendable", trait_Appendable)
+    utils.add_global("Container", trait_Container)
+    utils.add_global("Iterable", trait_Iterable)
+    utils.add_global("CanFind", trait_CanFind)
+    utils.add_global("CanDelete", trait_CanDelete)
+
 def deactivate():
     utils.remove_type(NullType)
     utils.remove_type(List_readonly)
@@ -2346,13 +2462,18 @@ def deactivate():
         utils.remove_type(dt)
     utils.remove_type(JsonProxyRoot)
     utils.remove_type(JsonNode)
+    utils.remove_type(List_Of)
+    utils.remove_type(Map_Of)
+    utils.remove_type(Iterator_Of)
+    utils.remove_type(Not_Type)
+    utils.remove_type(All_Types)
 
     remove_read_behavior("application/json", _read_file_json)
     remove_write_behavior("application/json", _write_file_json)
 
     utils.remove_function("list_from", f_list_from)
     utils.remove_function("map_from", f_map_from)
-    utils.remove_function("isinstance", f_isinstance)
+    utils.remove_function("isinstance", f_is)
     utils.remove_function("issubtype", f_issubtype)
     utils.remove_function("has", f_has)
     utils.remove_function("hasfunc", f_hasfunc)
@@ -2375,3 +2496,9 @@ def deactivate():
     utils.remove_function("delete", f_delete)
     utils.remove_function("delete_attribute", f_delete_attribute)
     utils.remove_function("now", f_now)
+
+    utils.remove_global("Appendable", trait_Appendable)
+    utils.remove_global("Container", trait_Container)
+    utils.remove_global("Iterable", trait_Iterable)
+    utils.remove_global("CanFind", trait_CanFind)
+    utils.remove_global("CanDelete", trait_CanDelete)

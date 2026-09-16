@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Iterable, Self
 KEYWORDS = {"if","else","loop","catch","global","var","define","and","or","not","break","skip"}
 
 PATTERN_NAME = r"(?:[a-zA-Z_][a-zA-Z0-9_]*)"
+PATTERN_NAME_CHARSET = r"[a-zA-Z0-9_]"
 PATTERN_OPERATOR = r"(?:\.|[+\-*\/%=><\!]=?)"
 PATTERN_INTEGER_LITERAL = r"(?:[0-9]+)"
 PATTERN_FLOAT_LITERAL = r"(?:[0-9]+\.[0-9]+)"
@@ -23,9 +24,12 @@ PATTERN_FUNCTION_BEGIN = f"(?:(?P<function_name>{PATTERN_NAME})\\s*\\()"
 PATTERN_SUBSCRIPT_BEGIN = f"(?:\\[)"
 _PATTERN_NO_OP = r"^$."
 #PATTERN_ASSIGN_BEGIN = f"(?:(?P<assign_name>{PATTERN_NAME})\\s*=)"
-PATTERN_MAIN = f"(?P<newline>\\n+)|\\s*(?:(?P<keyword>{PATTERN_KEYWORDS})|(?P<operator>{PATTERN_OPERATOR})|(?P<subscript>{PATTERN_SUBSCRIPT_BEGIN})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<name_value_pair>{PATTERN_NAME_VALUE_PAIR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
+PATTERN_MAIN = f"(?P<newline>\\n+)|\\s*(?:(?P<keyword>{PATTERN_KEYWORDS}(?!{PATTERN_NAME_CHARSET}))|(?P<operator>{PATTERN_OPERATOR})|(?P<subscript>{PATTERN_SUBSCRIPT_BEGIN})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<name_value_pair>{PATTERN_NAME_VALUE_PAIR})|(?P<value>{PATTERN_VALUE})|(?P<semicolon>;)|(?P<comma>,)|(?P<parenthesis>\\()|(?P<codeblock>\\{{)|(?P<enclend>[\\]\\)\\}}]))"
 PATTERN_FSTRING = f"[^\\S\\r\\n]*(?:(?P<keyword>{"|".join(["and", "or", "not"])})|(?P<operator>{PATTERN_OPERATOR})|(?P<subscript>{PATTERN_SUBSCRIPT_BEGIN})|(?P<function>{PATTERN_FUNCTION_BEGIN})|(?P<name_value_pair>{PATTERN_NAME_VALUE_PAIR})|(?P<value>{PATTERN_VALUE})|(?P<comma>,)|(?P<parenthesis>\\()|(?P<enclend>[\\]\\)])|(?P<fend>\\}}))|(?P<semicolon>{_PATTERN_NO_OP})|(?P<codeblock>{_PATTERN_NO_OP})|(?P<newline>{_PATTERN_NO_OP})"
 
+RE_NAME = re.compile(f"^{PATTERN_NAME}$")
+RE_INTEGER = re.compile(f"^{PATTERN_INTEGER_LITERAL}$")
+RE_INTEGER_SIGNED = re.compile(f"^\\-?\\s*{PATTERN_INTEGER_LITERAL}$")
 RE_MAIN = re.compile(PATTERN_MAIN)
 RE_FSTRING = re.compile(PATTERN_FSTRING)
 
@@ -39,11 +43,11 @@ class ScriptValue[T]:
     def isinstance(self, *dts:"ScriptDataType|ScriptTypeAnnotation"):
         comp_types = []
         for dt in dts:
-            if dt == BASE_TYPE:
-                return True
-            elif isinstance(dt, ScriptTypeAnnotation):
+            if isinstance(dt, ScriptTypeAnnotation):
                 if dt.compare(self):
                     return True
+            elif dt == BASE_TYPE:
+                return True
             else:
                 comp_types.append(dt)
         c = self.type
@@ -106,6 +110,8 @@ def parse_script_type_annotation(s:str):
     if annotation_start is None:
         t = name_to_type(name)
         if t is None:
+            if name == "null":
+                return DATA_TYPE_TABLE[type(None)]
             raise exceptions.AnnotationUnknownTypeException(f"Unknown type: {name}", type_name=name)
         return t
     at = _TYPE_ANNOTATIONS.get(name, None)
@@ -113,28 +119,39 @@ def parse_script_type_annotation(s:str):
         raise exceptions.UnknownAnnotationException(f"Unknown annotation: {name}", name=name)
     end = s.rfind("]")
     if end == -1 or any(not c.isspace() for c in s[end+1:]):
-        raise exceptions.AnnotationSubscriptException("Type annotation was not closed")
+        raise exceptions.AnnotationEnclosureException("Type annotation was not closed")
     return at.parse(s[m.endpos:end-1])
 
+_TA_ENCL_STARTS = "[("
+_TA_ENCL_ENDS = "])"
 def split_type_annotation_contents(s:str, seps:str):
     contents:list[str] = []
     start = 0
-    sb_counter = 0
+    encl:int = 0
+    enclcount:int = 0
+    if not s:
+        return contents
     for i, c in enumerate(s):
         c = s[i]
         if c in seps:
-            if sb_counter > 0:
+            if enclcount:
                 continue
             contents.append(s[start:i])
             start = i+1
-        elif c == "[":
-            sb_counter += 1
-        elif c == "]":
-            if sb_counter == 0:
-                raise exceptions.AnnotationSubscriptException("Type annotation has unexpected \"]\"")
-            sb_counter -= 1
-    if sb_counter:
-        raise exceptions.AnnotationSubscriptException("Type annotation has unmatched \"[\"")
+        elif (encli:=_TA_ENCL_STARTS.find(c)) > -1:
+            if enclcount:
+                if encli == encl:
+                    enclcount += 1
+            else:
+                encl = encli
+                enclcount = 1
+        elif c in _TA_ENCL_ENDS:
+            if enclcount:
+                enclcount -= 1
+            else:
+                raise exceptions.AnnotationEnclosureException(f"Type annotation has unexpected {repr(c)}")
+    if enclcount:
+        raise exceptions.AnnotationEnclosureException(f"Type annotation has unmatched: {"".join(_TA_ENCL_STARTS[i] for i in encl)}")
     last = s[start:i]
     if not last.strip():
         contents.append(last)
@@ -360,6 +377,7 @@ SCRIPT_FUNCTION_TABLE:FunctionTable = {}
 SCRIPT_GLOBAL_SCOPE:Namespace = {}
 
 class _enclose_stack:
+    __slots__ = "c", "end", "pnode", "basenode", "prev"
     def __init__(self, c:str, end:str, pnode:ParsingNode, basenode:ParsingNode, prev:Self|None=None):
         self.c = c
         self.end = end
@@ -368,6 +386,7 @@ class _enclose_stack:
         self.prev = prev
 
 class _operation_node:
+    __slots__ = "position", "operation", "onode", "precedence", "lhand", "rhand"
     def __init__(self, position:int, operation:str, onode:ParsingNodeOperator|ParsingNodeSubscript, precedence:int, lhand:Self|Any, rhand:Self|Any):
         self.position = position
         self.operation = operation
@@ -638,9 +657,14 @@ def wrap_python_type(t:type|ScriptDataType, update_table:bool=True, override_nam
         return st
 
     n = t.__name__
-    new_dts = set()
     mro = t.mro()
-    st = ScriptDataType(n if override_names is None else override_names if isinstance(override_names, str) else override_names.get(t, n), t, _resolve_dynamic_type_creation(mro[0], mro[1:], override_names if isinstance(override_names, dict) else None, new_dts))
+    parent, super_t = _resolve_dynamic_type_creation(mro[0], mro[1:], override_names if isinstance(override_names, dict) else None)
+    class _DynamicScriptDataType(super_t):
+        pass
+    st = _DynamicScriptDataType(
+        n if override_names is None else override_names if isinstance(override_names, str) else override_names.get(t, n),
+        t, parent
+    )
 
     if update_table:
         DATA_TYPE_TABLE[t] = st.init()

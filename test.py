@@ -65,12 +65,15 @@ SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 SCRIPT_FUNCTION_TABLE["test_exception"] = test_exception
 
 raw = r"""
-x = now()
-wait(5)
-y = now()
-log("x:", x)
-log("y:", y)
-log("y - x:", y-x)
+l = list(4)
+if is(l, Iterable) {
+    i = iterate_over(l)
+    if is(i, all_types(int, iterator)) {
+        i += 4
+    }
+    log(i)
+}
+log(l)
 """
 
 

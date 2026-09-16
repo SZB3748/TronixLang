@@ -26,6 +26,9 @@ class TronixException(Exception):
 class DuplicateOverloadException(Exception):
     "Overload already exists in function."
 
+class TraitMergeException(Exception):
+    "Could not merge a script function under the desired trait."
+
 class TypeAnnotationException(Exception):
     "Base class for type annotation exceptions."
 
@@ -53,8 +56,8 @@ class UnknownAnnotationException(Exception):
         super().__init__(*args)
         self.name = name
 
-class AnnotationSubscriptException(Exception):
-    "Type annotation has an issue with its [] or their contents."
+class AnnotationEnclosureException(Exception):
+    "Type annotation has an issue with an enclosing syntax or its contents."
 
 class _TronixRuntimeAssertion(Exception):
     "Assertion raised during script runtime."
