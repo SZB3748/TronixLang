@@ -2028,9 +2028,9 @@ def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.
         raise exceptions.TTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
     return ScriptValue(List, [name in data for name in names])
 
-@f_hasfunc.overload(("name", String))
-def function_hasfunc(name:ScriptVariable[str]):
-    return ScriptValue(Bool, name in script.SCRIPT_FUNCTION_TABLE)
+@f_hasfunc.overload(("name", String), pass_ctx=True)
+def function_hasfunc(ctx:ScriptContext, name:ScriptVariable[str]):
+    return ScriptValue(Bool, name in ctx.script.function_table)
 
 @f_log.overload(dict(name="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, "\n"))
 def function_log(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
