@@ -1043,8 +1043,11 @@ class ScriptTrait(script.ScriptTypeAnnotation):
                         if self._comp_ex(p, ex):
                             excomps.add(i)
                 if len(excomps) == len(self.extra):
-                    merge_function(self.func_name, f)
-        raise exceptions.TraitMergeException(f"Function does not meet the requirements of this triat.")
+                    return merge_function(self.func_name, f)
+        raise exceptions.TraitMergeException(f"Function does not meet the requirements of this trait.")
+
+    def remove_function(self, f:ScriptFunction):
+        return remove_function(self.func_name, f)
 
         
 class _serialized_value:
