@@ -676,7 +676,7 @@ class Script:
 
     HASH_FUNC = hashlib.md5
 
-    def __init__(self, raw:str, scope:Namespace=None, global_scope:Namespace=SCRIPT_GLOBAL_SCOPE, function_table:FunctionTable=SCRIPT_FUNCTION_TABLE):
+    def __init__(self, raw:str, scope:Namespace=None, global_scope:Namespace=SCRIPT_GLOBAL_SCOPE, function_table:FunctionTable=SCRIPT_FUNCTION_TABLE, loud_expressions:bool=False):
         self.raw = raw
         self._hash = self.HASH_FUNC(raw.encode("utf-8"), usedforsecurity=False).digest()
         self.scope = {} if scope is None else scope
@@ -685,10 +685,11 @@ class Script:
         self.steps:list[Callable[[],Any]] = []
         self.stack = ns_stack(self.scope, ns_stack(global_scope))
         self.steps_stack = step_stack_node(None, self.steps)
+        self.loud_expressions = loud_expressions
     
-    def parse(self)->ParsingNode:
+    def parse(self, context_name:str="TODO")->ParsingNode:
         i = 0
-        root = ParsingNode(None)
+        root = ParsingNode(ParsingContext(i, None, context_name))
         current = root
         enclstack:_enclose_stack|None = None
 
@@ -697,7 +698,7 @@ class Script:
             if isinstance(current, ParsingNodeConditionPair):
                 #if has condition and missing codeblock
                 if current.condition is not None and current.codeblock is None:
-                    raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
+                    raise exceptions.TExpectedSymbol("{ expected here", ctx=exceptions.ExceptionContext(current))
                 elif current.codeblock is not None: #if has codeblock
                     current = current.parent.parent
                 return True
@@ -727,7 +728,7 @@ class Script:
         def loopexpr_wrap_statement():
             nonlocal current
             if isinstance(current, ParsingNodeLoopStatement):
-                node = ParsingNodeLoopExpression(r, current)
+                node = ParsingNodeLoopExpression(ParsingContext(i, r, context_name), current)
                 current.children.append(node)
                 current = node
 
@@ -736,7 +737,7 @@ class Script:
             if not isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
                 end_condition() or end_loop() or end_catch()
                 loopexpr_wrap_statement()
-                exprnode = ParsingNodeExpression(r, current)
+                exprnode = ParsingNodeExpression(ParsingContext(i, r, context_name), current)
                 current.children.append(exprnode)
                 current = exprnode
 
@@ -754,12 +755,21 @@ class Script:
             looknode:ParsingNodeNVPair|None = look_nvpair()
             if looknode is not None:
                 if not isinstance(looknode.value, (ParsingNodeExpression, ParsingNodeParentheses)):
-                    raise exceptions.TExpectedEvaluable("expected evaluable expression as value for name-value pair", target=(current.match.pos, current.match))
+                    raise exceptions.TExpectedEvaluable(
+                        "expected evaluable expression as value for name-value pair",
+                        ctx=exceptions.ExceptionContext(looknode)
+                    )
                 current = looknode.parent
 
-        def fail_vardecl():
+        def fail_vardecl(i:int, r:Match, context_name:str, ctx_parent:ParsingContext|None):
             if isinstance(current, ParsingNodeVarDecl):
-                raise exceptions.TExpectedName("expected variable name", target=(current.match.pos, current.match))
+                raise exceptions.TExpectedName(
+                    "expected variable name",
+                    ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                )
+
+        def lambda_node(i:int, r:Match, context_name:str, ctx_parent:ParsingContext|None):
+            return ParsingNode(ParsingContext(i, r, context_name, ctx_parent), current)
 
         def check_loopcontrol():
             node = current
@@ -772,10 +782,10 @@ class Script:
                 node = node.parent
             return False
 
-        def handle_match(r:Match[str]):
+        def handle_match(i:int, r:Match[str], context_name:str, ctx_parent:ParsingContext|None=None):
             nonlocal current, enclstack, root
             if r["newline"] is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 looknode = look_nvpair()
                 if looknode is not None:
                     if looknode.value and not isinstance(looknode.children[-1], ParsingNodeOperator):
@@ -784,9 +794,12 @@ class Script:
                     current = current.parent
             elif (keyword := r["keyword"]) is not None:
                 if look_nvpair():
-                    raise exceptions.TUnexpectedKeyword(f"keyword not expected here", target=(i, r))
+                    raise exceptions.TUnexpectedKeyword(
+                        f"keyword not expected here",
+                        ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                    )
                 if keyword == "if":
-                    fail_vardecl()
+                    fail_vardecl(i, r, context_name, ctx_parent)
                     if isinstance(current, ParsingNodeConditionPair):
                         if current.condition is None and current.codeblock is None:
                             current.takes_condition = True
@@ -794,82 +807,103 @@ class Script:
                         elif current.takes_condition == (current.condition is not None) and current.codeblock is not None:
                             current = current.parent.parent
                         else:
-                            raise exceptions.TUnexpectedKeyword("keyword \"if\" not expected here", target=(i, r))
+                            raise exceptions.TUnexpectedKeyword(
+                                "keyword \"if\" not expected here",
+                                ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                            )
                     if isinstance(current, ParsingNodeExpression):
                         current = current.parent
                     if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
-                        raise exceptions.TUnexpectedKeyword("keyword \"if\" not expected here", target=(i, r))
-                    node = ParsingNodeIfStatement(r, current)
-                    cond = ParsingNodeConditionPair(r, node, takes_condition=True)
+                        raise exceptions.TUnexpectedKeyword(
+                            "keyword \"if\" not expected here",
+                            ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                        )
+                    node = ParsingNodeIfStatement(ParsingContext(i, r, context_name, ctx_parent), current)
+                    cond = ParsingNodeConditionPair(ParsingContext(i, r, context_name, ctx_parent), node, takes_condition=True)
                     node.children.append(cond)
                     current.children.append(node)
                     current = cond
                 elif keyword == "else":
-                    fail_vardecl()
+                    fail_vardecl(i, r, context_name, ctx_parent)
                     while current is not None:
                         if isinstance(current, ParsingNodeConditionPair):
                             break
                         current = current.parent
                     if current is None or current.condition is None or current.codeblock is None:
-                        raise exceptions.TUnexpectedKeyword("keyword \"else\" not expected here", target=(i, r))
+                        raise exceptions.TUnexpectedKeyword(
+                            "keyword \"else\" not expected here",
+                            ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                        )
                     current = current.parent
-                    cond = ParsingNodeConditionPair(r, current)
+                    cond = ParsingNodeConditionPair(ParsingContext(i, r, context_name, ctx_parent), current)
                     current.children.append(cond)
                     current = cond
                 elif keyword == "loop":
-                    fail_vardecl()
+                    fail_vardecl(i, r, context_name, ctx_parent)
                     if isinstance(current, ParsingNodeExpression):
                         current = current.parent
                     if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
-                        raise exceptions.TUnexpectedKeyword(f"keyword {repr(keyword)} not expected here", target=(i, r))
-                    node = ParsingNodeLoopStatement(r, current)
+                        raise exceptions.TUnexpectedKeyword(
+                            f"keyword {repr(keyword)} not expected here",
+                            ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                        )
+                    node = ParsingNodeLoopStatement(ParsingContext(i, r, context_name, ctx_parent), current)
                     current.children.append(node)
                     current = node
                 elif keyword == "catch":
-                    fail_vardecl()
+                    fail_vardecl(i, r, context_name, ctx_parent)
                     if isinstance(current, ParsingNodeExpression):
                         current = current.parent
                     if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
-                        raise exceptions.TUnexpectedKeyword(f"keyword {repr(keyword)} not expected here", target=(i, r))
-                    node = ParsingNodeCatchStatement(r, current)
+                        raise exceptions.TUnexpectedKeyword(
+                            f"keyword {repr(keyword)} not expected here",
+                            ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                        )
+                    node = ParsingNodeCatchStatement(ParsingContext(i, r, context_name, ctx_parent), current)
                     current.children.append(node)
                     current = node
                 elif keyword in ("global", "var", "define"):
-                    fail_vardecl()
+                    fail_vardecl(i, r, context_name, ctx_parent)
                     loopexpr_wrap_statement()
                     if not (current is root or isinstance(current, (ParsingNodeCodeBlock, ParsingNodeLoopExpression))):
-                        raise exceptions.TUnexpectedKeyword(f"keyword {repr(keyword)} not expected here", target=(i, r))
-                    node = ParsingNodeVarDecl(r, keyword, current)
+                        raise exceptions.TUnexpectedKeyword(
+                            f"keyword {repr(keyword)} not expected here",
+                            ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                        )
+                    node = ParsingNodeVarDecl(ParsingContext(i, r, context_name, ctx_parent), keyword, current)
                     current.children.append(node)
                     current = node
                 elif keyword in ("not","and","or"):
-                    fail_vardecl()
+                    fail_vardecl(i, r, context_name, ctx_parent)
                     wrap_statement()
-                    node = ParsingNodeOperator(keyword, r, current)
+                    node = ParsingNodeOperator(keyword, ParsingContext(i, r, context_name, ctx_parent), current)
                     current.children.append(node)
                 elif keyword in ("break", "skip"):
-                    fail_vardecl()
+                    fail_vardecl(i, r, context_name, ctx_parent)
                     if not check_loopcontrol():
-                        raise exceptions.TUnexpectedKeyword(f"keyword {repr(keyword)} not expected here", target=(i, r))
+                        raise exceptions.TUnexpectedKeyword(
+                            f"keyword {repr(keyword)} not expected here",
+                            ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                        )
                     if keyword == "break":
                         flags = _STEP_CONTROL_BREAK
                     else:
                         flags = _STEP_CONTROL_TOP
-                    node = ParsingNodeLoopControl(flags, 0, r, current)
+                    node = ParsingNodeLoopControl(flags, 0, ParsingContext(i, r, context_name, ctx_parent), current)
                     current.children.append(node)
             elif r["function"] is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 wrap_statement()
-                node = ParsingNodeFunction(r["function_name"], r, current)
+                node = ParsingNodeFunction(r["function_name"], ParsingContext(i, r, context_name), current)
                 current.children.append(node)
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
                 current = node
             elif r["name_value_pair"] is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 name = r["name_value_pair_name"]
                 wrap_statement()
-                nvpair = ParsingNodeNVPair(r, current)
-                nnode = ParsingNodeName(name, r, nvpair)
+                nvpair = ParsingNodeNVPair(ParsingContext(i, r, context_name, ctx_parent), current)
+                nnode = ParsingNodeName(name, ParsingContext(i, r, context_name, ctx_parent), nvpair)
                 nvpair.children.append(nnode)
                 current.children.append(nvpair)
                 current = nvpair
@@ -886,15 +920,15 @@ class Script:
                         escape_current = True
                     elif not isinstance(current, ParsingNodeCatchStatement):
                         wrap_statement()
-                    node = ParsingNodeName(v_name, r, current)
+                    node = ParsingNodeName(v_name, ParsingContext(i, r, context_name, ctx_parent), current)
                 else:
-                    fail_vardecl()
+                    fail_vardecl(i, r, context_name, ctx_parent)
                     wrap_statement()
                     if v_string and v_string[0] == "f":
                         vs = v_string[2:-1] #strip off the quotes
                         chars = []
                         ci = 0
-                        node = ParsingNodeFString(r, current)
+                        node = ParsingNodeFString(ParsingContext(i, r, context_name, ctx_parent), current)
                         old_root = root
                         root = current = node
                         while ci < len(vs):
@@ -923,22 +957,26 @@ class Script:
                             elif c == "{":
                                 ci += 1
                                 in_expression = True
+                                fi = i+ci+2
                                 if chars:
-                                    current.children.append(ParsingNodeValue("".join(chars), r, current))
+                                    current.children.append(ParsingNodeValue("".join(chars), ParsingContext(fi-len(chars), r, context_name, ctx_parent), current))
                                     chars.clear()
-                                node = ParsingNodeExpression(r, current)
+                                node = ParsingNodeExpression(ParsingContext(fi, None, context_name, ctx_parent), current)
                                 current.children.append(node)
                                 current = node
                                 while in_expression:
                                     fr = RE_FSTRING.match(vs, pos=ci)
                                     if fr is None:
                                         if vs[ci:].strip():
-                                            raise exceptions.TParsingException("f-string: unrecognizable syntax", target=(i+ci+2, None))
+                                            raise exceptions.TParsingException(
+                                                "f-string: unrecognizable syntax",
+                                                ctx=exceptions.ExceptionContext(lambda_node(fi, fr, context_name, ctx_parent))
+                                            )
                                         else:
                                             ... #TODO unexpected end of f-string
                                     if fr["fend"] is not None:
                                         in_expression = False
-                                    elif handle_match(fr):
+                                    elif handle_match(fi, fr, context_name, ctx_parent):
                                         ... #TODO unexpected end of f-string
                                     ci += fr.end() - ci
                                 current = root
@@ -946,7 +984,7 @@ class Script:
                                 chars.append(c)
                                 ci += 1
                         if chars:
-                            root.children.append(ParsingNodeValue("".join(chars), r, root))
+                            root.children.append(ParsingNodeValue("".join(chars), ParsingContext(ci+i+2-len(chars), r, context_name, ctx_parent), root))
                         node = root
                         current = root.parent
                         root = old_root
@@ -990,38 +1028,47 @@ class Script:
                         elif v_null:
                             value = None
                         else:
-                            raise exceptions.TUnknownValue(f"unknown value", target=(i, r))
-                        node = ParsingNodeValue(value, r, current)
+                            raise exceptions.TUnknownValue(
+                                f"unknown value",
+                                ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                            )
+                        node = ParsingNodeValue(value, ParsingContext(i, r, context_name, ctx_parent), current)
                 current.children.append(node)
                 if escape_current:
                     current = current.parent
             elif (operator := r["operator"]) is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 wrap_statement()
-                node = ParsingNodeOperator(operator, r, current)
+                node = ParsingNodeOperator(operator, ParsingContext(i, r, context_name, ctx_parent), current)
                 current.children.append(node)
             elif r["parenthesis"] is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 wrap_statement()
-                node = ParsingNodeParentheses(r, current)
+                node = ParsingNodeParentheses(ParsingContext(i, r, context_name, ctx_parent), current)
                 current.children.append(node)
                 enclstack = _enclose_stack("(",")", node, current, enclstack)
                 current = node
             elif r["subscript"] is not None:
-                fail_vardecl()
-                node = ParsingNodeSubscript(r, current)
+                fail_vardecl(i, r, context_name, ctx_parent)
+                node = ParsingNodeSubscript(ParsingContext(i, r, context_name, ctx_parent), current)
                 current.children.append(node)
                 enclstack = _enclose_stack("[","]", node, current, enclstack)
                 current = node
             elif r["codeblock"] is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
-                    raise exceptions.TUnexpectedSymbol("{ unexpected here", target=(i, r))
+                    raise exceptions.TUnexpectedSymbol(
+                        "{ unexpected here",
+                        ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                    )
                 if isinstance(current, ParsingNodeExpression):
                     current = current.parent
                 if isinstance(current, ParsingNodeConditionPair):
                     if current.takes_condition and current.condition is None:
-                        raise exceptions.TExpectedEvaluable("expected evaluable expression as if statement condition but got code block instead", target=(i, r))
+                        raise exceptions.TExpectedEvaluable(
+                            "expected evaluable expression as if statement condition but got code block instead",
+                            ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                        )
                     elif current.codeblock is not None:
                         current = current.parent.parent
                     basenode = current
@@ -1032,31 +1079,43 @@ class Script:
                     basenode = current.parent
                 else:
                     basenode = current
-                node = ParsingNodeCodeBlock(r, current)
+                node = ParsingNodeCodeBlock(ParsingContext(i, r, context_name, ctx_parent), current)
                 current.children.append(node)
                 enclstack = _enclose_stack("{","}", node, basenode, enclstack)
                 current = node
             elif (enclend := r["enclend"]) is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 if enclstack is None:
-                    raise exceptions.TEnclMismatch(f"unmatched {enclend}", target=(i, r))
+                    raise exceptions.TEnclMismatch(
+                        f"unmatched {enclend}",
+                        ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                    )
                 elif enclstack.end != enclend:
-                    raise exceptions.TEnclMismatch(f"closing {enclend} does not match opening {enclstack.c}", target=(i, r))
+                    raise exceptions.TEnclMismatch(
+                        f"closing {enclend} does not match opening {enclstack.c}",
+                        ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                    )
                 current = enclstack.basenode
                 enclstack = enclstack.prev
             elif r["comma"] is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 if enclstack is not None and isinstance(enclstack.pnode, ParsingNodeFunction):
                     current = enclstack.pnode
-                    current.children.append(ParsingNodeComma(r, current))
+                    current.children.append(ParsingNodeComma(ParsingContext(i, r, context_name, ctx_parent), current))
                 else:
-                    raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
+                    raise exceptions.TUnexpectedSymbol(
+                        "unexpected here",
+                        ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                    )
             elif r["semicolon"] is not None:
-                fail_vardecl()
+                fail_vardecl(i, r, context_name, ctx_parent)
                 end_nvpair()
                 end_condition() or end_loop() or end_catch() or end_loopexpr()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)) or look_nvpair():
-                    raise exceptions.TUnexpectedSymbol("unexpected here", target=(i, r))
+                    raise exceptions.TUnexpectedSymbol(
+                        "unexpected here",
+                        ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                    )
                 while current is not root:
                     if isinstance(current, (ParsingNodeCodeBlock, ParsingNodeIfStatement, ParsingNodeLoopStatement)):
                         break
@@ -1064,9 +1123,15 @@ class Script:
                 else:
                     current = root
             elif enclstack is not None:
-                raise exceptions.TExpectedSymbol(f"{enclstack.end} expected here", target=(i, r))
+                raise exceptions.TExpectedSymbol(
+                    f"{enclstack.end} expected here",
+                    ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                )
             elif isinstance(current, ParsingNodeConditionPair) and current.codeblock is None:
-                raise exceptions.TExpectedSymbol("{ expected here", target=(i, r))
+                raise exceptions.TExpectedSymbol(
+                    "{ expected here",
+                    ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
+                )
             else:
                 return True
             
@@ -1077,22 +1142,22 @@ class Script:
                 if self.raw[i:].strip():
                     raise exceptions.TParsingException("unrecognizable syntax", target=(i, None))
                 return root
-            if handle_match(r):
-                fail_vardecl()
+            if handle_match(i, r, context_name):
+                fail_vardecl(i, r, context_name, None)
                 return root
             i += r.end() - i
 
-    def _generate_function_call_step(self, node:ParsingNodeFunction, params:list[Callable[[], Awaitable]]):
+    def _generate_function_call_step(self, node:ParsingNodeFunction, params:list[Callable[[], Awaitable]], paramnodes:list[ParsingNode]):
         async def _function_step(): #evaluable step: step function 
             if node.function_name in self.function_table:
                 function = self.function_table[node.function_name]
                 evaluated_params = []
-                for pf in params:
+                for paramnode, pf in zip(paramnodes, params):
                     param = await pf()
                     if isinstance(param, _variable_access):
                         x = await param.resolve(self.stack)
                         if x is None:
-                            raise exceptions.TMissingName(f"{repr(param.path[0])} not found")
+                            raise exceptions.TMissingName(f"{repr(param.path[0])} not found", ctx=exceptions.ExceptionContext(paramnode, _function_step))
                         else:
                             param = x
                     if isinstance(param, ScriptValue):
@@ -1107,29 +1172,36 @@ class Script:
                     if inspect.isawaitable(value):
                         value = await value
                 except NotImplementedError as e:
-                    raise exceptions.TNotImplemented(f"function {repr(node.function_name)} is not implemented") from e
+                    raise exceptions.TNotImplemented(
+                        f"function {repr(node.function_name)} is not implemented",
+                        ctx=exceptions.ExceptionContext(node, _function_step)
+                    ) from e
                 except Exception as e:
                     raise exceptions.wrap(e)
                 if value is NotImplemented:
-                    raise exceptions.TNotImplemented(f"function {repr(node.function_name)} is not implemented")
+                    raise exceptions.TNotImplemented(
+                        f"function {repr(node.function_name)} is not implemented",
+                        ctx=exceptions.ExceptionContext(node, _function_step)
+                    )
                 self.stack = self.stack.prev #pop
                 return value
             else:
-                raise exceptions.TMissingFunction(f"cannot find function {repr(node.function_name)}")
+                raise exceptions.TMissingFunction(f"cannot find function {repr(node.function_name)}", ctx=exceptions.ExceptionContext(node, _function_step))
         return _function_step
 
     def _generate_function_steps(self, node:ParsingNodeFunction, rtv:_step_evaluation|None=None):
         params:list[Callable[[],Any]] = []
         param:Callable[[],Any]|None = None
+        paramnodes:list[ParsingNodeExpression|ParsingNodeParentheses|ParsingNodeFunction] = []
         for child in node.children:
             if isinstance(child, ParsingNodeComma):
                 if param is None:
-                    raise exceptions.TIncorrectParamaterOrder("comma is not following a parameter", target=child)
+                    raise exceptions.TIncorrectParamaterOrder("comma is not following a parameter", ctx=exceptions.ExceptionContext(child))
                 params.append(param)
                 param = None
                 continue
             elif param is not None:
-                raise exceptions.TIncorrectParamaterOrder("consecutive parameters without a comma", target=child)
+                raise exceptions.TIncorrectParamaterOrder("consecutive parameters without a comma", ctx=exceptions.ExceptionContext(child))
                 
             if isinstance(child, ParsingNodeFunction):
                 param = _step_evaluation()
@@ -1139,11 +1211,12 @@ class Script:
                 self._generate_expression_steps(child, param)
             else:
                 assert False, f"Unexpected node: {child}"
+            paramnodes.append(child)
 
         if param is not None:
             params.append(param)
 
-        step_cb = self._generate_function_call_step(node, params)
+        step_cb = self._generate_function_call_step(node, params, paramnodes)
         if rtv is None:
             self.steps_stack.steps.append(step_cb)
         else:
@@ -1184,7 +1257,7 @@ class Script:
             elif lh is None:
                 lh = child
             else:
-                raise exceptions.TIncorrectOperandOrder("consecutive operands where operator is expected", target=child)
+                raise exceptions.TIncorrectOperandOrder("consecutive operands where operator is expected", ctx=exceptions.ExceptionContext(child))
 
         if root_index is None:
             return None #no operators, node only contains a value
@@ -1214,7 +1287,7 @@ class Script:
                         if len(lhand.children) == 1:
                             lhand = lhand.children[0]
                         else:
-                            raise exceptions.TInvalidOperand("invalid expression", target=lhand)
+                            raise exceptions.TInvalidOperand("invalid expression", ctx=exceptions.ExceptionContext(lhand))
                     else:
                         lhand = l
                 parent.lhand = lhand
@@ -1249,7 +1322,7 @@ class Script:
                         if len(rhand.children) == 1:
                             rhand = rhand.children[0]
                         else:
-                            raise exceptions.TInvalidOperand("invalid expression", target=rhand)
+                            raise exceptions.TInvalidOperand("invalid expression", ctx=exceptions.ExceptionContext(rhand))
                     else:
                         rhand = r
                 parent.rhand = rhand
@@ -1292,7 +1365,10 @@ class Script:
                 if isinstance(v, ScriptVariable):
                     v = v.get()
                 if not isinstance(v, ScriptValue):
-                    raise exceptions.TMustEvaluate("value for name-value pair must evaluate but resulted in no value")
+                    raise exceptions.TMustEvaluate(
+                        "value for name-value pair must evaluate but resulted in no value",
+                        ctx=exceptions.ExceptionContext(operation.value, _step)
+                    )
                 return ScriptValue(DATA_TYPE_TABLE[ScriptNameValuePair], ScriptNameValuePair(operation.name.name, v.inner))
             step_eval.cb = _step
             return step_eval
@@ -1304,7 +1380,7 @@ class Script:
             async def _step():
                 ns = self.stack.find_name(n.name)
                 if ns is None:
-                    raise exceptions.TMissingName(f"{repr(n.name)} not found")
+                    raise exceptions.TMissingName(f"{repr(n.name)} not found", ctx=exceptions.ExceptionContext(n, _step))
                 return ns[n.name]
             return _step
         def _resolve_value(v:ScriptValue):
@@ -1321,7 +1397,10 @@ class Script:
                 if isinstance(v, ScriptVariable):
                     v = v.get()
                 if not isinstance(v, ScriptValue):
-                    raise exceptions.TMustEvaluate("value for name-value pair must evaluate but resulted in no value")
+                    raise exceptions.TMustEvaluate(
+                        "value for name-value pair must evaluate but resulted in no value",
+                        ctx=exceptions.ExceptionContext(node.value, _step)
+                    )
                 return ScriptValue(DATA_TYPE_TABLE[ScriptNameValuePair], ScriptNameValuePair(node.name.name, v.inner))
             return _step
 
@@ -1332,10 +1411,15 @@ class Script:
             elif isinstance(child, ParsingNodeName):
                 if rtv is not None:
                     rtv.cb = _resolve_name(child)
+                elif self.loud_expressions:
+                    self.steps_stack.steps.append(_resolve_name(child))
             elif isinstance(child, ParsingNodeValue):
                 if rtv is not None:
                     value = _convert_script_value(child.value)
                     rtv.cb = _resolve_value(value)
+                elif self.loud_expressions:
+                    value = _convert_script_value(child.value)
+                    self.steps_stack.steps.append(_resolve_value(value))
             elif isinstance(child, ParsingNodeFString):
                 self._generate_f_string_steps(child, rtv)
             elif isinstance(child, ParsingNodeNVPair):
@@ -1343,6 +1427,8 @@ class Script:
                 assert child.value is not None, f"NVPair value is missing {child}"
                 if rtv is not None:
                     rtv.cb = _resolve_nvpair(child)
+                elif self.loud_expressions:
+                    self.steps_stack.steps.append(_resolve_nvpair(child))
             assert not isinstance(child, ParsingNodeExpression), f"illegal recursive node: {node} -> {child}"
         else:
             os = self._generate_operation_steps(operation_tree)
@@ -1358,9 +1444,10 @@ class Script:
                 if rtv is not None:
                     rtv.cb = _resolve_value(os)
             else:
-                raise exceptions.TInvalidParameter("failed to evaluate parameter", node)
+                raise exceptions.TInvalidParameter("failed to evaluate parameter", ctx=exceptions.ExceptionContext(node))
 
     def _generate_f_string_steps(self, node:ParsingNodeFString, rtv:_step_evaluation|None=None):
+        cnodes:dict[int] = {}
         parts:list[str|None] = []
         replace:dict[int, Callable[[], Awaitable]] = {}
         i = 0
@@ -1372,6 +1459,7 @@ class Script:
                     step_eval = _step_evaluation()
                     self._generate_expression_steps(child, step_eval)
                     parts.append(None)
+                    cnodes
                     replace[i] = step_eval
                     i += 1
                     continue
@@ -1388,7 +1476,7 @@ class Script:
                         parts.append(s)
                         i += 1
             else:
-                raise exceptions.TInvalidFStringEmbeddedExpression(f"f-string embedded expression must evaluate", target=child)
+                raise exceptions.TInvalidFStringEmbeddedExpression(f"f-string embedded expression must evaluate", ctx=exceptions.ExceptionContext(child))
         async def string_parts():
             for i, part in enumerate(parts):
                 if part is None:
@@ -1396,7 +1484,7 @@ class Script:
                     if isinstance(x, _variable_access):
                         xx = await x.resolve(self.stack)
                         if xx is None:
-                            raise exceptions.TMissingName(f"{repr(x.path[0])} not found")
+                            raise exceptions.TMissingName(f"{repr(x.path[0])} not found", ctx=exceptions.ExceptionContext(node.children[i]))
                         else:
                             x = xx
                     if isinstance(x, ScriptVariable):

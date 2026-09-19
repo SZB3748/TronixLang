@@ -18,7 +18,10 @@ def generate_exception_help(raw:str, e:TronixException)->str:
     elif isinstance(e, TCompilationException):
         ...
     elif isinstance(e, TRuntimeException):
-        ...
+        if isinstance(e, TMissingName):
+            print(e.target)
+        name = getattr(e, "__TNAME__", type(e).__name__)
+        print(f"{name}: {e}")
     return "".join(s)
 
 def add_type(dt:ScriptDataType, constructor:bool=True, init:bool=True):
@@ -142,6 +145,7 @@ class ScriptRunner:
         self.parse_trees:dict[bytes, ParsingNode] = {}
         self.script_start_cbs:list[Callable[[Script],Any]] = []
         self.script_end_cbs:list[Callable[[Script],Any]] = []
+        self.script_step_cbs:list[Callable[[Script, Any],Any]] = []
 
     def _prep(self, s:Script|str, force_parse:bool, force_compile:bool):
         if isinstance(s, str):
@@ -186,6 +190,10 @@ class ScriptRunner:
                 await _next(x)
                 if x.new_ns_stackframe:
                     s.stack = s.stack.prev
+            else:
+                results = [c for cb in self.script_step_cbs if inspect.isawaitable(c:=cb(self, x))]
+                if results:
+                    await asyncio.gather(*results)
 
         async def _next(steps:AsyncIterable[Callable[[], Awaitable]]|Iterable[Callable[[], Awaitable]]):
             nonlocal control
@@ -222,7 +230,7 @@ class ScriptRunner:
         await self._run_cbs(s, self.script_end_cbs)
 
     def run(self, s:Script|str, force_parse:bool=False, force_compile:bool=False):
-        asyncio.run(self.run_async(s, force_parse, force_compile))
+        return asyncio.run(self.run_async(s, force_parse, force_compile))
 
     def add_script_start_cb(self, f:Callable[[Script],Any]):
         self.script_start_cbs.append(f)
@@ -231,12 +239,18 @@ class ScriptRunner:
     def add_script_end_cb(self, f:Callable[[Script],Any]):
         self.script_end_cbs.append(f)
         return f
+
+    def add_script_step_cb(self, f:Callable[[Script, Any],Any]):
+        self.script_step_cbs.append(f)
     
     def remove_script_start_cb(self, f:Callable[[Script],Any]):
         self.script_start_cbs.remove(f)
 
     def remove_script_end_cb(self, f:Callable[[Script],Any]):
         self.script_end_cbs.remove(f)
+
+    def remove_script_step_cb(self, f:Callable[[Script, Any],Any]):
+        self.script_step_cbs.remove(f)
 
 AttributeGetter = Callable[[ScriptValue, str], ScriptValue]
 AttributeSetter = Callable[[ScriptValue, str, ScriptVariable], ScriptValue]

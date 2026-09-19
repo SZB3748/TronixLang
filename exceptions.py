@@ -1,5 +1,7 @@
 from .import parsingnodes
 from re import Match
+from typing import Any, Callable, Self
+import weakref
 
 
 ExceptionFlags = int
@@ -7,12 +9,21 @@ FLAG_WARNING = 1
 
 ParsingExceptionTarget = tuple[int, Match|None]|tuple[None,None]
 
+class ExceptionContext:
+    def __init__(self, node:parsingnodes.ParsingNode, step:Callable[[], Any]|None=None, parent:Self|None=None):
+        self.node = node
+        self.step = step
+        self.parent = parent
+        self._e:weakref.ReferenceType[TronixException]|None = None
+
 class TronixException(Exception):
     "Base class for tronix exceptions."
 
-    def __init__(self, message:str, flags:ExceptionFlags=0):
+    def __init__(self, message:str, flags:ExceptionFlags=0, ctx:ExceptionContext|None=None):
         super().__init__(message)
         self.flags = flags
+        self._ctx = ctx
+        ctx._e = weakref.ref(self)
 
     @property
     def is_warning(self):
@@ -66,10 +77,6 @@ class _TronixRuntimeAssertion(Exception):
 class TParsingException(TronixException): #aka syntax exception
     "Base class for all tronix parsing exceptions."
 
-    def __init__(self, message:str, target:ParsingExceptionTarget=(None,None), flags:ExceptionFlags=0):
-        super().__init__(message, flags)
-        self.target = target
-
 class TUnknownValue(TParsingException):
     "Could read value but could not determine its type."
 
@@ -99,10 +106,6 @@ class TExpectedName(TParsingException):
 class TCompilationException(TronixException):
     "Base class for all tronix compilation exceptions."
 
-    def __init__(self, message:str, target:parsingnodes.ParsingNode|None=None, flags:ExceptionFlags=0):
-        super().__init__(message, flags)
-        self.target = target
-
 class TIncorrectParamaterOrder(TCompilationException):
     "Parameter node order is incorrect."
 
@@ -127,15 +130,14 @@ class TInvalidFStringEmbeddedExpression(TCompilationException):
 
 class TRuntimeException(TronixException):
     "Base class for all tronix runtime exceptions."
-    def __init__(self, message:str, target:parsingnodes.ParsingNode|None=None, flags:ExceptionFlags=0):
-        super().__init__(message, flags)
-        self.target = target
 
 class TMissingFunction(TRuntimeException):
     "Function is not in the function table."
 
 class TMissingName(TRuntimeException):
     "Name is not in any namespace."
+
+    __TNAME__ = "MissingName"
 
 class TNotImplemented(TRuntimeException):
     "Function or operation is not implemented."
@@ -158,19 +160,19 @@ class TUserException(TRuntimeException):
 class TBadValue(TRuntimeException):
     "Function received a value it didn't like."
 
-    def __init__(self, message:str, target:parsingnodes.ParsingNode|None=None, flags:ExceptionFlags=0, parameter:str|None=None):
-        super().__init__(message, target, flags)
+    def __init__(self, message:str, flags:ExceptionFlags=0, ctx:ExceptionContext|None=None, parameter:str|None=None):
+        super().__init__(message, flags, ctx)
         self.parameter = parameter
 
 class TWrappedException(TRuntimeException):
-    def __init__(self, e:Exception, flags:ExceptionFlags=0):
-        super().__init__(f"{type(e).__name__}: {e}", flags)
+    def __init__(self, ctx:ExceptionContext, e:Exception, flags:ExceptionFlags=0):
+        super().__init__(ctx, f"{type(e).__name__}: {e}", flags)
         self._e = e
     
     def unwrap(self):
         return self._e
 
-def wrap(e:Exception, flags:ExceptionFlags=0):
+def wrap(e:Exception, flags:ExceptionFlags=0, ctx:ExceptionContext|None=None):
     if isinstance(e, (TronixException, _TronixRuntimeAssertion)):
         return e
-    return TWrappedException(e, flags=flags)
+    return TWrappedException(e, flags=flags, ctx=ctx)

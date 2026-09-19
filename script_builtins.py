@@ -2193,7 +2193,7 @@ def list_find_value(target:ScriptVariable[list], value:ScriptVariable, start:Scr
     istart = start.get().inner
     istop = stop.get().inner
     try:
-        index = t.index(v, start=istart, stop=istop)
+        index = t.index(v, istart, istop)
     except ValueError:
         index = -1
     return script.ScriptValue(Integer, index)

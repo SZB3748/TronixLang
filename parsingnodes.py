@@ -1,32 +1,40 @@
-from typing import Any
+from typing import Any, Self
 from re import Match
 
+class ParsingContext:
+    __slots__ = "i", "match", "name", "parent"
+    def __init__(self, i:int, match:Match|None, name:str, parent:Self|None=None):
+        self.i = i
+        self.match = match
+        self.name = name
+        self.parent = parent
+
 class ParsingNode:
-    def __init__(self, match:Match|None, parent:"ParsingNode|None"=None, children:list["ParsingNode"]|None=None):
+    def __init__(self, ctx:ParsingContext, parent:"ParsingNode|None"=None, children:list["ParsingNode"]|None=None):
         self.parent = parent
         self.children = [] if children is None else children
-        self.match = match
+        self.ctx = ctx
 
 class ParsingNode_Terminating(ParsingNode):
-    def __init__(self, match:Match, parent:ParsingNode|None=None):
-        super().__init__(match, parent, None)
+    def __init__(self, ctx:ParsingContext, parent:ParsingNode|None=None):
+        super().__init__(ctx, parent, None)
 
 class ParsingNodeExpression(ParsingNode):
     pass
 
 class ParsingNodeName(ParsingNode_Terminating):
-    def __init__(self, name:str, match:Match, parent:ParsingNode|None=None):
-        super().__init__(match, parent)
+    def __init__(self, name:str, ctx:ParsingContext, parent:ParsingNode|None=None):
+        super().__init__(ctx, parent)
         self.name = name
 
 class ParsingNodeFunction(ParsingNode):
-    def __init__(self, function_name:str, match:Match, parent:ParsingNode|None=None, parameters:list[ParsingNode]|None=None):
-        super().__init__(match, parent, parameters)
+    def __init__(self, function_name:str, ctx:ParsingContext, parent:ParsingNode|None=None, parameters:list[ParsingNode]|None=None):
+        super().__init__(ctx, parent, parameters)
         self.function_name = function_name
 
 class ParsingNodeValue(ParsingNode_Terminating):
-    def __init__(self, value:Any, match:Match, parent:ParsingNode|None=None):
-        super().__init__(match, parent)
+    def __init__(self, value:Any, ctx:ParsingContext, parent:ParsingNode|None=None):
+        super().__init__(ctx, parent)
         self.value = value
 
 class ParsingNodeFString(ParsingNode):
@@ -42,8 +50,8 @@ class ParsingNodeComma(ParsingNode_Terminating):
     pass
 
 class ParsingNodeOperator(ParsingNode_Terminating):
-    def __init__(self, operator:str, match:Match, parent:ParsingNode|None=None):
-        super().__init__(match, parent)
+    def __init__(self, operator:str, ctx:ParsingContext, parent:ParsingNode|None=None):
+        super().__init__(ctx, parent)
         self.operator = operator
 
 class ParsingNodeSubscript(ParsingNode):
@@ -53,14 +61,14 @@ class ParsingNodeIfStatement(ParsingNode):
     pass
 
 class ParsingNodeLoopExpression(ParsingNode):
-    def __init__(self, match:Match, parent:"ParsingNodeLoopStatement|None"=None, expression:ParsingNodeExpression|ParsingNodeParentheses|None=None):
-        super().__init__(match, parent, [])
+    def __init__(self, ctx:ParsingContext, parent:"ParsingNodeLoopStatement|None"=None, expression:ParsingNodeExpression|ParsingNodeParentheses|None=None):
+        super().__init__(ctx, parent, [])
         if expression is not None:
             self.children.append(expression)
 
 class ParsingNodeLoopStatement(ParsingNode):
-    def __init__(self, match:Match, parent:ParsingNode|None=None, expressions:list[ParsingNodeLoopExpression]|None=None, codeblock:ParsingNodeCodeBlock|None=None):
-        super().__init__(match, parent, [])
+    def __init__(self, ctx:ParsingContext, parent:ParsingNode|None=None, expressions:list[ParsingNodeLoopExpression]|None=None, codeblock:ParsingNodeCodeBlock|None=None):
+        super().__init__(ctx, parent, [])
         if expressions is not None:
             self.children.extend(expressions)
         if codeblock is not None:
@@ -68,8 +76,8 @@ class ParsingNodeLoopStatement(ParsingNode):
 
 
 class ParsingNodeConditionPair(ParsingNode):
-    def __init__(self, match:Match, parent:ParsingNodeIfStatement|None, condition:ParsingNodeExpression|ParsingNodeParentheses|None=None, codeblock:ParsingNodeCodeBlock|None=None, takes_condition:bool=False):
-        super().__init__(match, parent, [])
+    def __init__(self, ctx:ParsingContext, parent:ParsingNodeIfStatement|None, condition:ParsingNodeExpression|ParsingNodeParentheses|None=None, codeblock:ParsingNodeCodeBlock|None=None, takes_condition:bool=False):
+        super().__init__(ctx, parent, [])
         self.takes_condition = takes_condition
         if condition is not None:
             self.condition = condition
@@ -110,8 +118,8 @@ class ParsingNodeConditionPair(ParsingNode):
             self.children.append(value)
 
 class ParsingNodeNVPair(ParsingNode):
-    def __init__(self, match:Match, parent:ParsingNode|None=None, name:ParsingNodeName|None=None, value:ParsingNodeExpression|ParsingNodeParentheses|None=None):
-        super().__init__(match, parent, [])
+    def __init__(self, ctx:ParsingContext, parent:ParsingNode|None=None, name:ParsingNodeName|None=None, value:ParsingNodeExpression|ParsingNodeParentheses|None=None):
+        super().__init__(ctx, parent, [])
         if name is not None:
             self.name = name
         if value is not None:
@@ -148,8 +156,8 @@ class ParsingNodeNVPair(ParsingNode):
             self.children.append(value)
 
 class ParsingNodeVarDecl(ParsingNode):
-    def __init__(self, match:Match, kw:str, parent:ParsingNode|None=None, name:ParsingNodeName|None=None):
-        super().__init__(match, parent, [])
+    def __init__(self, ctx:ParsingContext, kw:str, parent:ParsingNode|None=None, name:ParsingNodeName|None=None):
+        super().__init__(ctx, parent, [])
         self.kw = kw
         if name is not None:
             self.children.append(name)
@@ -169,8 +177,8 @@ class ParsingNodeVarDecl(ParsingNode):
             self.children.append(value)
 
 class ParsingNodeLoopControl(ParsingNode_Terminating):
-    def __init__(self, flags:int, value:int, match:Match, parent:ParsingNode|None=None):
-        super().__init__(match, parent)
+    def __init__(self, flags:int, value:int, ctx:ParsingContext, parent:ParsingNode|None=None):
+        super().__init__(ctx, parent)
         self.flags = flags
         self.value = value
 
