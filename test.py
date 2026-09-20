@@ -34,6 +34,7 @@ async def async_returner(ctx:ScriptContext):
 
 f_test_annotations = utils.ScriptFunction()
 f_test_iter = utils.ScriptFunction()
+f_rolist = utils.ScriptFunction()
 
 @f_test_annotations.overload(("test", script_builtins.ListOf(script_builtins.String, script_builtins.ListOf(script_builtins.AnyType))))
 def test_annotations(test:ScriptVariable[list[str]]):
@@ -55,6 +56,10 @@ def test_iter(iter_var:ScriptVariable[int|None], limit:ScriptVariable[int]):
             return script_builtins.false
         iter_var.assign(wrap_python_value(itval+1))
     return script_builtins.true
+
+@f_rolist.overload(("l", script_builtins.List))
+def rolist(l:ScriptVariable[list]):
+    return wrap_python_value(script_builtins._rolist_wrapper(l.get().inner))
     
 
 SCRIPT_FUNCTION_TABLE["test_async"] = test_async
@@ -63,17 +68,28 @@ SCRIPT_FUNCTION_TABLE["await"] = lambda ctx: ctx.params[0].get()
 SCRIPT_FUNCTION_TABLE["test_annotations"] = f_test_annotations
 SCRIPT_FUNCTION_TABLE["test_iter"] = f_test_iter
 SCRIPT_FUNCTION_TABLE["test_exception"] = test_exception
+SCRIPT_FUNCTION_TABLE["rolist"] = f_rolist
 
 raw = r"""
-l = list(4)
-if is(l, Iterable) {
-    i = iterate_over(l)
-    if is(i, all_types(int, iterator)) {
-        i += 4
-    }
-    log(i)
-}
+l = list(iterate_over_range(0,5))
 log(l)
+next(l[0])
+log(l)
+
+p = pair(iterate_over(l), 2)
+log(p)
+next(p.first)
+log(p)
+
+rol = rolist(l)
+log(rol)
+"
+next(rol[0])
+log(rol)
+"
+
+append(rol, 2)
+log(rol)
 """
 
 
@@ -108,11 +124,16 @@ print("parsed:", pend-pstart, pstart, pend)
 runner = utils.ScriptRunner()
 
 async def run_func(runner:utils.ScriptRunner, s:Script):
-    estart = time.perf_counter_ns()
-    await runner.run_async(s)
-    eend = time.perf_counter_ns()
-    print("executed:", eend - estart, estart, eend)
-    print()
+    try:
+        estart = time.perf_counter_ns()
+        await runner.run_async(s)
+        eend = time.perf_counter_ns()
+    except exceptions.TronixException as e:
+        print(utils.generate_exception_help(s, e))
+        raise
+    else:
+        print("executed:", eend - estart, estart, eend)
+        print()
 
 if __name__ == "__main__":
     import asyncio
@@ -144,5 +165,5 @@ if __name__ == "__main__":
     
     asyncio.run(run_func(runner, s))
 else:
-    print(utils.print_parsetree(p, include_matches=False))
+    print(utils.print_parsetree(p, include_context=False))
     

@@ -11,18 +11,18 @@ from typing import Any, Callable
 def script_repr(v:ScriptValue)->str:
     return v.type.repr(v).inner
 
-def generate_exception_help(raw:str, e:TronixException)->str:
-    s = []
-    if isinstance(e, TParsingException):
-        ...
-    elif isinstance(e, TCompilationException):
-        ...
-    elif isinstance(e, TRuntimeException):
-        if isinstance(e, TMissingName):
-            print(e.target)
-        name = getattr(e, "__TNAME__", type(e).__name__)
-        print(f"{name}: {e}")
-    return "".join(s)
+def generate_exception_help(s:script.Script, e:TronixException, step:Callable[[], Any]|None=None)->str:
+    help_text = e.help_text(s, step=step)
+    if help_text is not None:
+        return str(help_text)
+    name = getattr(e, "__TNAME__", type(e).__name__)
+    # if isinstance(e, TParsingException):
+    #     ...
+    # elif isinstance(e, TCompilationException):
+    #     ...
+    # elif isinstance(e, TRuntimeException):
+    #     ...
+    return f"{name}: {e}"
 
 def add_type(dt:ScriptDataType, constructor:bool=True, init:bool=True):
     if init:
@@ -147,6 +147,12 @@ class ScriptRunner:
         self.script_end_cbs:list[Callable[[Script],Any]] = []
         self.script_step_cbs:list[Callable[[Script, Any],Any]] = []
 
+    def cache(self, s:Script|bytes, p:ParsingNode):
+        if isinstance(s, script.Script):
+            s = s._hash
+        self.parse_trees[s] = p
+        return p
+
     def _prep(self, s:Script|str, force_parse:bool, force_compile:bool):
         if isinstance(s, str):
             s = Script(s)
@@ -175,25 +181,39 @@ class ScriptRunner:
 
         async def run_step(step:Callable[[], Awaitable], exception_control:bool):
             nonlocal control
-            if exception_control:
-                try:
+            try:
+                if exception_control:
+                    try:
+                        x = await step()
+                    except Exception as e:
+                        x = script._step_control(script._STEP_CONTROL_BREAK|script._STEP_CONTROL_EXCEPTION, exc=e)
+                else:
                     x = await step()
-                except Exception as e:
-                    x = script._step_control(script._STEP_CONTROL_BREAK|script._STEP_CONTROL_EXCEPTION, exc=e)
-            else:
-                x = await step()
-            if isinstance(x, script._step_control):
-                control = x
-            elif isinstance(x, script._step_expansion):
-                if x.new_ns_stackframe:
-                    s.stack = script.ns_stack({}, s.stack)
-                await _next(x)
-                if x.new_ns_stackframe:
-                    s.stack = s.stack.prev
-            else:
-                results = [c for cb in self.script_step_cbs if inspect.isawaitable(c:=cb(self, x))]
-                if results:
-                    await asyncio.gather(*results)
+                if isinstance(x, script._step_control):
+                    control = x
+                elif isinstance(x, script._step_expansion):
+                    if x.new_ns_stackframe:
+                        s.stack = script.ns_stack({}, s.stack)
+                    await _next(x)
+                    if x.new_ns_stackframe:
+                        s.stack = s.stack.prev
+                else:
+                    results = [c for cb in self.script_step_cbs if inspect.isawaitable(c:=cb(s, x))]
+                    if results:
+                        await asyncio.gather(*results)
+            except Exception as e:
+                te = wrap(e)
+                if te._ctx is None:
+                    _step = step
+                    while isinstance(_step, script._step_evaluation):
+                        _step = _step.cb
+                    node = s.steps_debug.get(_step, None)
+                    if node is not None:
+                        te._set_context(exceptions.ExceptionContext(node, _step))
+                if te is e:
+                    raise
+                else:
+                    raise te from e
 
         async def _next(steps:AsyncIterable[Callable[[], Awaitable]]|Iterable[Callable[[], Awaitable]]):
             nonlocal control
@@ -274,23 +294,23 @@ class ScriptAttributeNoAccess[T, K, U]:
 def __error_repr_attr_key(n:str|ScriptVariable):
     return script_repr(n.get()) if isinstance(n, script.ScriptVariable) else repr(n)
 
-_DEFAULT_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only get {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
-_DEFAULT_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only assign to {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
-_DEFAULT_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only delete {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
-_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
-_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
-_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete {__error_repr_attr_key(n)} attribute from {o.type.name} object", error=TypeError)
+_DEFAULT_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is get-only", error=TypeError)
+_DEFAULT_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is assign-only", error=TypeError)
+_DEFAULT_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is delete-only", error=TypeError)
+_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=TypeError)
+_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=TypeError)
+_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=TypeError)
 
-_DEFAULT_ITEM_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only get {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only assign to {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"can only delete {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete {__error_repr_attr_key(n)} item from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is get-only", error=TypeError)
+_DEFAULT_ITEM_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is assign-only", error=TypeError)
+_DEFAULT_ITEM_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is delete-only", error=TypeError)
+_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=TypeError)
 
-_DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable (you can't do value[...])", error=exceptions.TNotImplemented)
-_DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign value of type {v.type().name} to {__error_repr_attr_key(n)} {"item" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
-_DEFAULT_DELETE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n: f"cannot delete {f"item of type {n.type().name}" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
+_DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable", error=exceptions.TNotImplemented)
+_DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign value of type {v.type().name} to {"item at" if isinstance(n, script.ScriptVariable) else "attribute"} {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TTypeError)
+_DEFAULT_DELETE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n: f"cannot delete {f"item at value of type {n.type().name}" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
 
 def SimpleGetAttribute(name:str|None=None)->AttributeGetter:
     def f(o:ScriptValue, n:str):
@@ -683,7 +703,8 @@ class ScriptFunctionParam:
             else:
                 tt = script.parse_script_type_annotation(t)
                 if tt is None:
-                    raise exceptions.TMissingName(f"function signature: type or annotation {repr(t)} not defined")
+                    raise exceptions.TMissingName(
+                        f"function signature: type or annotation {repr(t)} not defined", t)
                 yield tt
 
     def __eq__(self, other):
@@ -711,7 +732,6 @@ class ScriptFunctionParamSet:
         for i, param in enumerate(self.params):
             if param.default is _PARAM_NO_DEFAULT and not param.pack: #is positional and not pack
                 if got_required_end: #after default args
-                    print(param.name)
                     raise exceptions.TInvalidParameterOrder("cannot have positional parameter after parameter with a default value")
             elif not got_required_end:
                 got_required_end = True
@@ -1095,22 +1115,22 @@ class _serialized_value:
         self.type_str = isinstance(self.t, str)
 
 
-def parsetree_to_xml(p:ParsingNode, include_matches:bool=True):
+def parsetree_to_xml(p:ParsingNode, include_context:bool=True):
     d = p.__dict__.copy()
-    if not include_matches:
-        d.pop("match",None)
+    if not include_context:
+        d.pop("ctx",None)
     d.pop("parent",None)
     children = d.pop("children",None)
     elm = ET.Element(type(p).__name__, attrib={k:v if isinstance(v, str) else repr(v) for k,v in d.items()})
     if children:
         for child in children:
-            childelm  = parsetree_to_xml(child, include_matches)
+            childelm  = parsetree_to_xml(child, include_context)
             elm.append(childelm)
     return elm
 
-def print_parsetree(p:ParsingNode|ET.Element, include_matches:bool=True):
+def print_parsetree(p:ParsingNode|ET.Element, include_context:bool=True):
     if not isinstance(p, ET.Element):
-        p = parsetree_to_xml(p, include_matches)
+        p = parsetree_to_xml(p, include_context)
     return xml.dom.minidom.parseString(ET.tostring(p)).toprettyxml(indent="    ")
     
 

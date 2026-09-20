@@ -903,7 +903,7 @@ _ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_wrapper,int](_List
 class _ListReadonlyType(_ListType):
     
     attrs = _ListReadonlyTypeAttrs
-    attrs.wildcard.noset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).nodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
+    attrs.wildcard.itemnoset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).itemnodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
 
 _MapReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rodict_wrapper,Any](_MapTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
 @_MapReadonlyTypeAttrs.enforce_child_attrs()
@@ -911,7 +911,7 @@ _MapReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rodict_wrapper,Any](_MapTy
 class _MapReadonlyType(_MapType):
 
     attrs = _MapReadonlyTypeAttrs
-    attrs.wildcard.noset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).nodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
+    attrs.wildcard.itemnoset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).itemnodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
 
 
 class _iterator[T](int):
@@ -1626,8 +1626,8 @@ Pair = _PairType("pair", _pair, BASE_TYPE)
 List = _ListType("list", list, BASE_TYPE)
 Map = _MapType("map", dict, BASE_TYPE)
 MapItem = pair_alias_subtype("map_item", ["key"], ["value"], _map_item_pair)
-List_readonly = _ListReadonlyType("_list_readonly", _rolist_wrapper, List)
-Map_readonly = _MapReadonlyType("_map_readonly", _rodict_wrapper, Map)
+List_readonly = _ListReadonlyType("readonly_list", _rolist_wrapper, List)
+Map_readonly = _MapReadonlyType("readonly_map", _rodict_wrapper, Map)
 Iterator = _IteratorType("iterator", _iterator, Integer)
 RangeIterator = _RangeIteratorType("range_iterator", _range_iterator, Iterator)
 IterableIterator = _IterableIteratorType("iterable_iterator", _iterable_iterator, Iterator)
@@ -2365,7 +2365,7 @@ def delete_name(ctx:ScriptContext, name:ScriptVariable[str]):
     n = name.get().inner
     v = ctx.stack.pop_name(n)
     if v is None:
-        raise exceptions.TMissingName(f"Could not find name to delete: {repr(n)}")
+        raise exceptions.TMissingName(f"Could not find name to delete: {repr(n)}", n)
     return v
 
 @f_delete.overload(("value", [AnyType, NamePair]), ("key_or_index", [AnyType, NamePair]))

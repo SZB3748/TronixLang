@@ -2,12 +2,16 @@ from typing import Any, Self
 from re import Match
 
 class ParsingContext:
-    __slots__ = "i", "match", "name", "parent"
-    def __init__(self, i:int, match:Match|None, name:str, parent:Self|None=None):
+    __slots__ = "i", "match", "name", "parent", "i_end"
+    def __init__(self, i:int, match:Match|None, name:str, parent:Self|None=None, i_end:int|None=None):
         self.i = i
         self.match = match
         self.name = name
         self.parent = parent
+        self.i_end = i_end
+
+    def __repr__(self):
+        return f"<{type(self).__name__} i={self.i} match={self.match} name={repr(self.name)} parent={"NONE" if self.parent is None else repr(self.parent.name)}>"
 
 class ParsingNode:
     def __init__(self, ctx:ParsingContext, parent:"ParsingNode|None"=None, children:list["ParsingNode"]|None=None):
