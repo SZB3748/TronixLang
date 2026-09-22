@@ -1,14 +1,32 @@
 from typing import Any, Self
 from re import Match
+import weakref
+
+class operation_node:
+    __slots__ = "position", "operation", "_onode", "precedence", "lhand", "rhand"
+    def __init__(self, position:int, operation:str, onode:"ParsingNodeOperator|ParsingNodeSubscript", precedence:int, lhand:"Self|ParsingNode", rhand:"Self|ParsingNode"):
+        self.position = position
+        self.operation = operation
+        self._onode = weakref.ref(onode)
+        self.onode.ctx.optree = self
+        self.precedence = precedence
+        self.lhand = lhand
+        self.rhand = rhand
+        
+    @property
+    def onode(self):
+        return self._onode()
+
 
 class ParsingContext:
-    __slots__ = "i", "match", "name", "parent", "i_end"
-    def __init__(self, i:int, match:Match|None, name:str, parent:Self|None=None, i_end:int|None=None):
+    __slots__ = "i", "match", "name", "parent", "i_end", "optree"
+    def __init__(self, i:int, match:Match|None, name:str, parent:Self|None=None, i_end:int|None=None, optree:operation_node|None=None):
         self.i = i
         self.match = match
         self.name = name
         self.parent = parent
         self.i_end = i_end
+        self.optree = optree
 
     def __repr__(self):
         return f"<{type(self).__name__} i={self.i} match={self.match} name={repr(self.name)} parent={"NONE" if self.parent is None else repr(self.parent.name)}>"

@@ -212,7 +212,7 @@ class ScriptDataType[T]:
         elif isinstance(x, self.inner):
             return ScriptValue(self, x)
         else:
-            raise exceptions.TTypeError(f"could not deserialize data for type {self.name}")
+            raise exceptions.TRTypeError(f"could not deserialize data for type {self.name}")
 
     def construct(self, ctx:"ScriptContext")->ScriptValue:
         return ScriptValue(self, self.inner.__new__())
@@ -392,23 +392,15 @@ SCRIPT_FUNCTION_TABLE:FunctionTable = {}
 SCRIPT_GLOBAL_SCOPE:Namespace = {}
 
 class _enclose_stack:
-    __slots__ = "c", "end", "pnode", "basenode", "prev"
-    def __init__(self, c:str, end:str, pnode:ParsingNode, basenode:ParsingNode, prev:Self|None=None):
+    __slots__ = "c", "end", "pnode", "basenode", "r", "prev"
+    def __init__(self, c:str, end:str, pnode:ParsingNode, basenode:ParsingNode, r:Match|None=None, prev:Self|None=None):
         self.c = c
         self.end = end
         self.pnode = pnode
         self.basenode = basenode
+        self.r = r
         self.prev = prev
 
-class _operation_node:
-    __slots__ = "position", "operation", "onode", "precedence", "lhand", "rhand"
-    def __init__(self, position:int, operation:str, onode:ParsingNodeOperator|ParsingNodeSubscript, precedence:int, lhand:Self|Any, rhand:Self|Any):
-        self.position = position
-        self.operation = operation
-        self.onode = onode
-        self.precedence = precedence
-        self.lhand = lhand
-        self.rhand = rhand
 
 _VA_NAME = object()
 _VA_SUBSCRIPT = object()
@@ -714,7 +706,7 @@ class Script:
             if isinstance(current, ParsingNodeConditionPair):
                 #if has condition and missing codeblock
                 if current.condition is not None and current.codeblock is None:
-                    raise exceptions.TExpectedSymbol("{ expected here", ctx=exceptions.ExceptionContext(current))
+                    raise exceptions.TPExpectedSymbol("{ expected here", ctx=exceptions.ExceptionContext(current))
                 elif current.codeblock is not None: #if has codeblock
                     current = current.parent.parent
                 return True
@@ -759,11 +751,11 @@ class Script:
 
         def look_nvpair():
             if isinstance(current, (ParsingNodeExpression, ParsingNodeParentheses)):
-                looknode = current.parent
+                ln = current.parent
             else:
-                looknode = current
-            if isinstance(looknode, ParsingNodeNVPair) and looknode.value is not None:
-                return looknode
+                ln = current
+            if isinstance(ln, ParsingNodeNVPair) and ln.value is not None:
+                return ln
             return None
 
         def end_nvpair():
@@ -771,7 +763,7 @@ class Script:
             looknode:ParsingNodeNVPair|None = look_nvpair()
             if looknode is not None:
                 if not isinstance(looknode.value, (ParsingNodeExpression, ParsingNodeParentheses)):
-                    raise exceptions.TExpectedEvaluable(
+                    raise exceptions.TPExpectedEvaluable(
                         "expected evaluable expression as value for name-value pair",
                         ctx=exceptions.ExceptionContext(looknode)
                     )
@@ -779,13 +771,51 @@ class Script:
 
         def fail_vardecl(i:int, r:Match|None, context_name:str, ctx_parent:ParsingContext|None):
             if isinstance(current, ParsingNodeVarDecl):
-                raise exceptions.TExpectedName(
+                raise exceptions.TPExpectedName(
                     "expected variable name",
                     ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                 )
 
-        def lambda_node(i:int, r:Match|None, context_name:str, ctx_parent:ParsingContext|None):
-            return ParsingNode(ParsingContext(i, r, context_name, ctx_parent), current)
+        def eof_check(i:int, r:Match|None, context_name:str, ctx_parent:ParsingContext|None):
+            if enclstack is not None:
+                raise exceptions.TPUnexpectedEndOfCode(
+                    f"{enclstack.c} is never matched (expected {repr(enclstack.end)})",
+                    ctx=exceptions.ExceptionContext(lambda_node(i, enclstack.r, context_name, ctx_parent))
+                )
+            node = current
+            while node is not root:
+                if isinstance(node, ParsingNodeConditionPair):
+                    if node.condition is None and node.takes_condition or node.codeblock is None:
+                        end = exceptions._get_i_end(node)
+                        raise exceptions.TPUnexpectedEndOfCode(
+                            f"{"if" if node.takes_condition else "else"} statement is incomplete",
+                            ctx=exceptions.ExceptionContext(lambda_node(end, r, context_name, ctx_parent, end+3))
+                        )
+                elif isinstance(node, ParsingNodeLoopExpression) or (
+                    isinstance(node, ParsingNodeLoopStatement) and
+                    not (node.children and isinstance(node.children[-1], ParsingNodeCodeBlock))):
+                    end = exceptions._get_i_end(node)
+                    raise exceptions.TPUnexpectedEndOfCode(
+                        "loop statement is incomplete",
+                        ctx=exceptions.ExceptionContext(lambda_node(end, r, context_name, ctx_parent, end+3))
+                    )
+                elif isinstance(node, ParsingNodeCatchStatement) and not node.children:
+                    end = exceptions._get_i_end(node)
+                    raise exceptions.TPUnexpectedEndOfCode(
+                        "catch statement is incomplete",
+                        ctx=exceptions.ExceptionContext(lambda_node(end, r, context_name, ctx_parent, end+3))
+                    )
+                elif isinstance(node, ParsingNodeNVPair) and node.value is None:
+                    end = exceptions._get_i_end(node)
+                    raise exceptions.TPUnexpectedEndOfCode(
+                        "name-value pair is incomplete",
+                        ctx=exceptions.ExceptionContext(lambda_node(end, r, context_name, ctx_parent, end+3))
+                    )
+                node = node.parent
+
+
+        def lambda_node(i:int, r:Match|None, context_name:str, ctx_parent:ParsingContext|None, i_end:int|None=None):
+            return ParsingNode(ParsingContext(i, r, context_name, ctx_parent, i_end), current)
 
         def check_loopcontrol():
             node = current
@@ -802,7 +832,7 @@ class Script:
             nonlocal current, enclstack, root
             if r["newline"] is not None:
                 fail_vardecl(i, r, context_name, ctx_parent)
-                looknode = look_nvpair()
+                looknode:ParsingNodeNVPair|None = look_nvpair()
                 if looknode is not None:
                     if looknode.value and not isinstance(looknode.children[-1], ParsingNodeOperator):
                         current = looknode.parent
@@ -810,7 +840,7 @@ class Script:
                     current = current.parent
             elif (keyword := r["keyword"]) is not None:
                 if look_nvpair():
-                    raise exceptions.TUnexpectedKeyword(
+                    raise exceptions.TPUnexpectedKeyword(
                         f"keyword not expected here",
                         ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                     )
@@ -823,14 +853,14 @@ class Script:
                         elif current.takes_condition == (current.condition is not None) and current.codeblock is not None:
                             current = current.parent.parent
                         else:
-                            raise exceptions.TUnexpectedKeyword(
+                            raise exceptions.TPUnexpectedKeyword(
                                 "keyword \"if\" not expected here",
                                 ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                             )
                     if isinstance(current, ParsingNodeExpression):
                         current = current.parent
                     if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
-                        raise exceptions.TUnexpectedKeyword(
+                        raise exceptions.TPUnexpectedKeyword(
                             "keyword \"if\" not expected here",
                             ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                         )
@@ -846,7 +876,7 @@ class Script:
                             break
                         current = current.parent
                     if current is None or current.condition is None or current.codeblock is None:
-                        raise exceptions.TUnexpectedKeyword(
+                        raise exceptions.TPUnexpectedKeyword(
                             "keyword \"else\" not expected here",
                             ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                         )
@@ -859,7 +889,7 @@ class Script:
                     if isinstance(current, ParsingNodeExpression):
                         current = current.parent
                     if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
-                        raise exceptions.TUnexpectedKeyword(
+                        raise exceptions.TPUnexpectedKeyword(
                             f"keyword {repr(keyword)} not expected here",
                             ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                         )
@@ -871,7 +901,7 @@ class Script:
                     if isinstance(current, ParsingNodeExpression):
                         current = current.parent
                     if not (current is root or isinstance(current, ParsingNodeCodeBlock)):
-                        raise exceptions.TUnexpectedKeyword(
+                        raise exceptions.TPUnexpectedKeyword(
                             f"keyword {repr(keyword)} not expected here",
                             ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                         )
@@ -882,7 +912,7 @@ class Script:
                     fail_vardecl(i, r, context_name, ctx_parent)
                     loopexpr_wrap_statement(i, r, context_name, ctx_parent)
                     if not (current is root or isinstance(current, (ParsingNodeCodeBlock, ParsingNodeLoopExpression))):
-                        raise exceptions.TUnexpectedKeyword(
+                        raise exceptions.TPUnexpectedKeyword(
                             f"keyword {repr(keyword)} not expected here",
                             ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                         )
@@ -897,7 +927,7 @@ class Script:
                 elif keyword in ("break", "skip"):
                     fail_vardecl(i, r, context_name, ctx_parent)
                     if not check_loopcontrol():
-                        raise exceptions.TUnexpectedKeyword(
+                        raise exceptions.TPUnexpectedKeyword(
                             f"keyword {repr(keyword)} not expected here",
                             ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                         )
@@ -912,7 +942,7 @@ class Script:
                 wrap_statement(i, r, context_name, ctx_parent)
                 node = ParsingNodeFunction(r["function_name"], ParsingContext(i, r, context_name), current)
                 current.children.append(node)
-                enclstack = _enclose_stack("(",")", node, current, enclstack)
+                enclstack = _enclose_stack("(",")", node, current, r, enclstack)
                 current = node
             elif r["name_value_pair"] is not None:
                 fail_vardecl(i, r, context_name, ctx_parent)
@@ -1044,7 +1074,7 @@ class Script:
                         elif v_null:
                             value = None
                         else:
-                            raise exceptions.TUnknownValue(
+                            raise exceptions.TPUnknownValue(
                                 f"unknown value",
                                 ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                             )
@@ -1062,18 +1092,18 @@ class Script:
                 wrap_statement(i, r, context_name, ctx_parent)
                 node = ParsingNodeParentheses(ParsingContext(i, r, context_name, ctx_parent), current)
                 current.children.append(node)
-                enclstack = _enclose_stack("(",")", node, current, enclstack)
+                enclstack = _enclose_stack("(",")", node, current, r, enclstack)
                 current = node
             elif r["subscript"] is not None:
                 fail_vardecl(i, r, context_name, ctx_parent)
                 node = ParsingNodeSubscript(ParsingContext(i, r, context_name, ctx_parent), current)
                 current.children.append(node)
-                enclstack = _enclose_stack("[","]", node, current, enclstack)
+                enclstack = _enclose_stack("[","]", node, current, r, enclstack)
                 current = node
             elif r["codeblock"] is not None:
                 fail_vardecl(i, r, context_name, ctx_parent)
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)):
-                    raise exceptions.TUnexpectedSymbol(
+                    raise exceptions.TPUnexpectedSymbol(
                         "{ unexpected here",
                         ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                     )
@@ -1081,7 +1111,7 @@ class Script:
                     current = current.parent
                 if isinstance(current, ParsingNodeConditionPair):
                     if current.takes_condition and current.condition is None:
-                        raise exceptions.TExpectedEvaluable(
+                        raise exceptions.TPExpectedEvaluable(
                             "expected evaluable expression as if statement condition but got code block instead",
                             ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                         )
@@ -1097,17 +1127,17 @@ class Script:
                     basenode = current
                 node = ParsingNodeCodeBlock(ParsingContext(i, r, context_name, ctx_parent), current)
                 current.children.append(node)
-                enclstack = _enclose_stack("{","}", node, basenode, enclstack)
+                enclstack = _enclose_stack("{","}", node, basenode, r, enclstack)
                 current = node
             elif (enclend := r["enclend"]) is not None:
                 fail_vardecl(i, r, context_name, ctx_parent)
                 if enclstack is None:
-                    raise exceptions.TEnclMismatch(
+                    raise exceptions.TPEnclMismatch(
                         f"unmatched {enclend}",
                         ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                     )
                 elif enclstack.end != enclend:
-                    raise exceptions.TEnclMismatch(
+                    raise exceptions.TPEnclMismatch(
                         f"closing {enclend} does not match opening {enclstack.c}",
                         ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                     )
@@ -1120,7 +1150,7 @@ class Script:
                     current = enclstack.pnode
                     current.children.append(ParsingNodeComma(ParsingContext(i, r, context_name, ctx_parent), current))
                 else:
-                    raise exceptions.TUnexpectedSymbol(
+                    raise exceptions.TPUnexpectedSymbol(
                         "unexpected here",
                         ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                     )
@@ -1129,7 +1159,7 @@ class Script:
                 end_nvpair()
                 end_condition() or end_loop() or end_catch() or end_loopexpr()
                 if not (enclstack is None or isinstance(enclstack.pnode, ParsingNodeCodeBlock)) or look_nvpair():
-                    raise exceptions.TUnexpectedSymbol(
+                    raise exceptions.TPUnexpectedSymbol(
                         "unexpected here",
                         ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                     )
@@ -1140,12 +1170,12 @@ class Script:
                 else:
                     current = root
             elif enclstack is not None:
-                raise exceptions.TExpectedSymbol(
+                raise exceptions.TPExpectedSymbol(
                     f"{enclstack.end} expected here",
                     ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                 )
             elif isinstance(current, ParsingNodeConditionPair) and current.codeblock is None:
-                raise exceptions.TExpectedSymbol(
+                raise exceptions.TPExpectedSymbol(
                     "{ expected here",
                     ctx=exceptions.ExceptionContext(lambda_node(i, r, context_name, ctx_parent))
                 )
@@ -1159,11 +1189,15 @@ class Script:
                 if self.raw[i:].strip():
                     raise exceptions.TParsingException(
                         "unrecognizable syntax",
-                        ctx=lambda_node(i, None, context_name, None)
+                        ctx=exceptions.ExceptionContext(lambda_node(i, None, context_name, None))
                     )
+                else:
+                    fail_vardecl(i, r, context_name, None)
+                    eof_check(i, r, context_name, None)
                 return root
             if handle_match(i, r, context_name):
                 fail_vardecl(i, r, context_name, None)
+                eof_check(i, r, context_name, None)
                 return root
             i += r.end() - i
 
@@ -1179,7 +1213,7 @@ class Script:
                         _va = param
                         x = await param.resolve(self.stack)
                         if x is None:
-                            raise exceptions.TMissingName(
+                            raise exceptions.TRMissingName(
                                 f"{repr(param.path[0].value)} not found",
                                 param.path[0].value,
                                 ctx=exceptions.ExceptionContext(paramnode, _function_step)
@@ -1202,14 +1236,14 @@ class Script:
                     if inspect.isawaitable(value):
                         value = await value
                 except NotImplementedError as e:
-                    raise exceptions.TNotImplemented(
+                    raise exceptions.TRNotImplemented(
                         f"function {repr(node.function_name)} is not implemented",
                         ctx=exceptions.ExceptionContext(node, _function_step)
                     ) from e
                 except Exception as e:
                     raise exceptions.wrap(e)
                 if value is NotImplemented:
-                    raise exceptions.TNotImplemented(
+                    raise exceptions.TRNotImplemented(
                         f"function {repr(node.function_name)} is not implemented",
                         ctx=exceptions.ExceptionContext(node, _function_step)
                     )
@@ -1217,7 +1251,7 @@ class Script:
                 for i, (va, val) in va_params.items():
                     l = await va.resolve(self.stack, -1)
                     if l is None:
-                        raise exceptions.TMissingName(
+                        raise exceptions.TRMissingName(
                             f"{repr(va.path[0].value)} not found",
                             va.path[0].value,
                             ctx=exceptions.ExceptionContext(paramnode, _function_step)
@@ -1238,20 +1272,20 @@ class Script:
                     try:
                         x = f(*args, param)
                     except NotImplementedError as e:
-                        raise exceptions.TNotImplemented(
+                        raise exceptions.TRNotImplemented(
                             "function assigned to parameter, but assign is not implemented",
                             ctx=exceptions.ExceptionContext(paramnodes[i], _function_step)
                         ) from e
                     except Exception as e:
                         raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(paramnodes[i], _function_step))
                     if x is NotImplemented:
-                        raise exceptions.TNotImplemented(
+                        raise exceptions.TRNotImplemented(
                             "function assigned to parameter, but assign is not implemented",
                             ctx=exceptions.ExceptionContext(paramnodes[i], _function_step)
                         )
                 return value
             else:
-                raise exceptions.TMissingFunction(f"cannot find function {repr(node.function_name)}", ctx=exceptions.ExceptionContext(node, _function_step))
+                raise exceptions.TRMissingFunction(f"cannot find function {repr(node.function_name)}", ctx=exceptions.ExceptionContext(node, _function_step))
         self.steps_debug[_function_step] = node
         return _function_step
 
@@ -1262,12 +1296,12 @@ class Script:
         for child in node.children:
             if isinstance(child, ParsingNodeComma):
                 if param is None:
-                    raise exceptions.TIncorrectParamaterOrder("comma is not following a parameter", ctx=exceptions.ExceptionContext(child))
+                    raise exceptions.TCIncorrectParamaterOrder("comma is not following a parameter", ctx=exceptions.ExceptionContext(child))
                 params.append(param)
                 param = None
                 continue
             elif param is not None:
-                raise exceptions.TIncorrectParamaterOrder("consecutive parameters without a comma", ctx=exceptions.ExceptionContext(child))
+                raise exceptions.TCIncorrectParamaterOrder("consecutive parameters without a comma", ctx=exceptions.ExceptionContext(child))
                 
             if isinstance(child, ParsingNodeFunction):
                 param = _step_evaluation()
@@ -1288,7 +1322,7 @@ class Script:
         else:
             rtv.cb = step_cb
 
-    def _get_expression_operations(self, node:ParsingNodeExpression|ParsingNodeParentheses)->_operation_node:
+    def _get_expression_operations(self, node:ParsingNodeExpression|ParsingNodeParentheses)->operation_node:
         operators:list[tuple[int, str, ParsingNodeOperator|ParsingNodeSubscript, int]] = []
         lh = None
         root_precedence_level = -1
@@ -1323,12 +1357,12 @@ class Script:
             elif lh is None:
                 lh = child
             else:
-                raise exceptions.TIncorrectOperandOrder("consecutive operands where operator is expected", ctx=exceptions.ExceptionContext(child))
+                raise exceptions.TCIncorrectOperandOrder("consecutive operands where operator is expected", ctx=exceptions.ExceptionContext(child))
 
         if root_index is None:
             return None #no operators, node only contains a value
         
-        def _left_construct(midpoint:int, parent:_operation_node, bounds:tuple[int, int]):
+        def _left_construct(midpoint:int, parent:operation_node, bounds:tuple[int, int]):
             if parent.operation.endswith("u"):
                 return
             
@@ -1353,17 +1387,17 @@ class Script:
                         if len(lhand.children) == 1:
                             lhand = lhand.children[0]
                         else:
-                            raise exceptions.TInvalidOperand("invalid expression", ctx=exceptions.ExceptionContext(lhand))
+                            raise exceptions.TCInvalidOperand("invalid expression", ctx=exceptions.ExceptionContext(lhand))
                     else:
                         lhand = l
                 parent.lhand = lhand
             else:
-                next = _operation_node(*operators[next_midpoint], None, None)
+                next = operation_node(*operators[next_midpoint], None, None)
                 parent.lhand = next
                 _left_construct(next_midpoint, next, (bounds[0], next_midpoint-1))
                 _right_construct(next_midpoint, next, (next_midpoint+1, bounds[1]))
         
-        def _right_construct(midpoint:int, parent:_operation_node, bounds:tuple[int, int]):
+        def _right_construct(midpoint:int, parent:operation_node, bounds:tuple[int, int]):
             if parent.operation.startswith("u"):
                 return
             
@@ -1388,25 +1422,25 @@ class Script:
                         if len(rhand.children) == 1:
                             rhand = rhand.children[0]
                         else:
-                            raise exceptions.TInvalidOperand("invalid expression", ctx=exceptions.ExceptionContext(rhand))
+                            raise exceptions.TCInvalidOperand("invalid expression", ctx=exceptions.ExceptionContext(rhand))
                     else:
+                        rhand.ctx.optree = r
                         rhand = r
                 parent.rhand = rhand
             else:
-                next = _operation_node(*operators[next_midpoint], None, None)
+                next = operation_node(*operators[next_midpoint], None, None)
                 parent.rhand = next
                 _left_construct(next_midpoint, next, (bounds[0], next_midpoint-1))
                 _right_construct(next_midpoint, next, (next_midpoint+1, bounds[1]))
 
-        root = _operation_node(*operators[root_index], None, None)
-
+        root = operation_node(*operators[root_index], None, None)
         _left_construct(root_index, root, (0, root_index-1))
         _right_construct(root_index, root, (root_index+1, len(operators)-1))
 
         return root
     
-    def _generate_operation_steps(self, operation:_operation_node|Any):
-        if isinstance(operation, _operation_node):
+    def _generate_operation_steps(self, operation:operation_node|Any):
+        if isinstance(operation, operation_node):
             lhs = self._generate_operation_steps(operation.lhand)   
             rhs = self._generate_operation_steps(operation.rhand)
             return _step_evaluation(_operator_step_generators[operation.operation](self, operation, lhs, rhs))
@@ -1431,7 +1465,7 @@ class Script:
                 if isinstance(v, ScriptVariable):
                     v = v.get()
                 if not isinstance(v, ScriptValue):
-                    raise exceptions.TMustEvaluate(
+                    raise exceptions.TRMustEvaluate(
                         "value for name-value pair must evaluate but resulted in no value",
                         ctx=exceptions.ExceptionContext(operation.value, _step)
                     )
@@ -1447,7 +1481,7 @@ class Script:
             async def _step():
                 ns = self.stack.find_name(n.name)
                 if ns is None:
-                    raise exceptions.TMissingName(
+                    raise exceptions.TRMissingName(
                         f"{repr(n.name)} not found",
                         n.name,
                         ctx=exceptions.ExceptionContext(n, _step)
@@ -1470,7 +1504,7 @@ class Script:
                 if isinstance(v, ScriptVariable):
                     v = v.get()
                 if not isinstance(v, ScriptValue):
-                    raise exceptions.TMustEvaluate(
+                    raise exceptions.TRMustEvaluate(
                         "value for name-value pair must evaluate but resulted in no value",
                         ctx=exceptions.ExceptionContext(node.value, _step)
                     )
@@ -1520,7 +1554,7 @@ class Script:
                 if rtv is not None:
                     rtv.cb = _resolve_value(os)
             else:
-                raise exceptions.TInvalidParameter("failed to evaluate parameter", ctx=exceptions.ExceptionContext(node))
+                raise exceptions.TCInvalidParameter("failed to evaluate parameter", ctx=exceptions.ExceptionContext(node))
 
     def _generate_f_string_steps(self, node:ParsingNodeFString, rtv:_step_evaluation|None=None):
         cnodes:dict[int] = {}
@@ -1552,7 +1586,7 @@ class Script:
                         parts.append(s)
                         i += 1
             else:
-                raise exceptions.TInvalidFStringEmbeddedExpression(f"f-string embedded expression must evaluate", ctx=exceptions.ExceptionContext(child))
+                raise exceptions.TCInvalidFStringEmbeddedExpression(f"f-string embedded expression must evaluate", ctx=exceptions.ExceptionContext(child))
         async def string_parts():
             for i, part in enumerate(parts):
                 if part is None:
@@ -1560,7 +1594,7 @@ class Script:
                     if isinstance(x, _variable_access):
                         xx = await x.resolve(self.stack)
                         if xx is None:
-                            raise exceptions.TMissingName(
+                            raise exceptions.TRMissingName(
                                 f"{repr(x.path[0].value)} not found",
                                 x.path[0].value,
                                 ctx=exceptions.ExceptionContext(node.children[i], _step)
@@ -1599,12 +1633,12 @@ class Script:
                     self.steps_stack = stepsnode.parent
                     last.cb = stepsnode.create_exp_step()
                 else:
-                    raise exceptions.TIncorrectIfStatement(
+                    raise exceptions.TCIncorrectIfStatement(
                         "else if cannot come after if",
                         ctx=exceptions.ExceptionContext(pair)
                     )
             elif last is not None:
-                raise exceptions.TIncorrectIfStatement(
+                raise exceptions.TCIncorrectIfStatement(
                     "else if cannot come after else",
                     ctx=exceptions.ExceptionContext(pair)
                 )
@@ -1623,7 +1657,7 @@ class Script:
                 if isinstance(v, _variable_access):
                     x = await v.resolve(self.stack)
                     if x is None:
-                        raise exceptions.TMissingName(
+                        raise exceptions.TRMissingName(
                             f"{repr(v.path[0].value)} not found",
                             v.path[0].value,
                             ctx=exceptions.ExceptionContext(node.children[i].condition, _step)
@@ -1631,7 +1665,7 @@ class Script:
                     else:
                         v = x
                 if not isinstance(v, ScriptValue):
-                    raise exceptions.TMustEvaluate(
+                    raise exceptions.TRMustEvaluate(
                         "if statement condition must evaluate but resulted in no value",
                         ctx=exceptions.ExceptionContext(node.children[i].condition, _step)
                     )
@@ -1682,7 +1716,7 @@ class Script:
                 if isinstance(x, ScriptValue):
                     return bool(x.type.conv_bool(x).inner)
                 else:
-                    raise exceptions.TMustEvaluate(
+                    raise exceptions.TRMustEvaluate(
                         "loop statement condition expression (the last expression) must evaluate but resulted in no value",
                         ctx=exceptions.ExceptionContext(condition_node, _condition_step)
                     )
@@ -1707,8 +1741,8 @@ class Script:
             rtv.cb = _steps
 
     def _generate_catch_statement_steps(self, node:ParsingNodeCatchStatement):
-        if not node.children or len(node.children) > 2 or (len(node.children) == 1 and not isinstance(node, ParsingNodeCodeBlock)) or not(isinstance(node.children[0], ParsingNodeName) and isinstance(node.children[1], ParsingNodeCodeBlock)):
-            raise exceptions.TIncorrentCatchStatement(
+        if not node.children or len(node.children) > 2 or (len(node.children) == 1 and not isinstance(node.children[0], ParsingNodeCodeBlock)) or (len(node.children) == 2 and not(isinstance(node.children[0], ParsingNodeName) and isinstance(node.children[1], ParsingNodeCodeBlock))):
+            raise exceptions.TCIncorrentCatchStatement(
                 "catch statement needs at most one name followed by one codeblock",
                 exceptions.ExceptionContext(node)
             )
@@ -1721,8 +1755,12 @@ class Script:
             name = nnode.name
             blocki = 1
 
-        async def _catch_step(e:Exception):
-            self.stack.find_name(name)[name].assign(wrap_python_value(exceptions.wrap(e)))
+        if name is None:
+            async def _catch_step(_:Exception):
+                pass
+        else:
+            async def _catch_step(e:Exception):
+                self.stack.find_name(name)[name].assign(wrap_python_value(exceptions.wrap(e)))
 
         self.steps_stack = step_stack_node(self.steps_stack, [])
         self._generate_codeblock_steps(node.children[blocki])
@@ -1795,7 +1833,7 @@ async def _resolve_h(script:Script, h, hnode:ParsingNode, step:Callable[[], Any]
     if isinstance(h, _variable_access):
         x = await h.resolve(script.stack)
         if x is None:
-            raise exceptions.TMissingName(
+            raise exceptions.TRMissingName(
                 f"{repr(h.path[0].value)} not found",
                 h.path[0].value,
                 ctx=exceptions.ExceptionContext(hnode, step)
@@ -1809,7 +1847,7 @@ async def _resolve_h(script:Script, h, hnode:ParsingNode, step:Callable[[], Any]
     elif isinstance(h, ParsingNodeName):
         ns = script.stack.find_name(h.name)
         if ns is None:
-            raise exceptions.TMissingName(
+            raise exceptions.TRMissingName(
                 f"{repr(h.name)} not found",
                 h.name,
                 ctx=exceptions.ExceptionContext(hnode, step)
@@ -1835,7 +1873,7 @@ async def _resolve_vh(script:Script, h, hnode:ParsingNode, step:Callable[[], Any
     elif isinstance(h, ParsingNodeName):
         ns = script.stack.find_name(h.name)
         if ns is None:
-            raise exceptions.TMissingName(
+            raise exceptions.TRMissingName(
                 f"{repr(h.name)} not found",
                 h.name,
                 ctx=exceptions.ExceptionContext(hnode, step)
@@ -1855,7 +1893,7 @@ async def _resolve_ih(script:Script, h, hnode:ParsingNode, step:Callable[[], Any
         if get_attr and len(h.path) > 1:
             x = await h.resolve(script.stack, -1)
             if x is None:
-                raise exceptions.TMissingName(
+                raise exceptions.TRMissingName(
                     f"{repr(h.path[0].value)} not found",
                     h.path[0].value,
                     ctx=exceptions.ExceptionContext(hnode, step)
@@ -1878,7 +1916,7 @@ async def _resolve_ih(script:Script, h, hnode:ParsingNode, step:Callable[[], Any
                 ns = script.stack.ns
                 ns[h.name] = ScriptVariable(None)
             else:
-                raise exceptions.TMissingName(
+                raise exceptions.TRMissingName(
                     f"{repr(h.name)} not found",
                     h.name,
                     ctx=exceptions.ExceptionContext(hnode, step)
@@ -1904,30 +1942,30 @@ async def _resolve_nh(h)->_variable_access:
         raise exceptions._TronixRuntimeAssertion(f"invalid operand {_h} -> {h}")
 
 
-def _generate_add_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_add_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().add(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -1935,30 +1973,30 @@ def _generate_add_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_sub_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_sub_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().sub(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -1967,30 +2005,30 @@ def _generate_sub_steps(script:Script, op:_operation_node, lh, rh):
     return _step
     
 
-def _generate_mlt_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_mlt_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().mlt(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -1999,30 +2037,30 @@ def _generate_mlt_steps(script:Script, op:_operation_node, lh, rh):
     return _step
     
 
-def _generate_div_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_div_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().div(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2031,30 +2069,30 @@ def _generate_div_steps(script:Script, op:_operation_node, lh, rh):
     return _step
     
 
-def _generate_mod_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_mod_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().mod(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2063,7 +2101,7 @@ def _generate_mod_steps(script:Script, op:_operation_node, lh, rh):
     return _step
     
 
-async def _inplace_operator_step(script:Script, op:_operation_node, lh, rh, opname:str, _step):
+async def _inplace_operator_step(script:Script, op:operation_node, lh, rh, opname:str, _step):
     l = await _resolve_ih(script, lh, op.onode.parent.children[op.position-1], _step, get_attr=True)
     if isinstance(l, ScriptVariable):
         lvar = l
@@ -2084,19 +2122,19 @@ async def _inplace_operator_step(script:Script, op:_operation_node, lh, rh, opna
     try:
         ix:ScriptValue = getattr(lvar.type(), opname)(lvar, r)
     except NotImplementedError as e:
-        raise exceptions.TNotImplemented(
+        raise exceptions.TRNotImplemented(
             "operation is not implemented",
             ctx=exceptions.ExceptionContext(op.onode, _step)
         ) from e
     except Exception as e:
         raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
     if ix is None:
-        raise exceptions.TMustEvaluate(
+        raise exceptions.TRMustEvaluate(
             f"operation must evaluate but resulted in no value",
             ctx=exceptions.ExceptionContext(op.onode, _step)
         )
     elif ix is NotImplemented:
-        raise exceptions.TNotImplemented(
+        raise exceptions.TRNotImplemented(
             "operation is not implemented",
             ctx=exceptions.ExceptionContext(op.onode, _step)
         )
@@ -2111,7 +2149,7 @@ async def _inplace_operator_step(script:Script, op:_operation_node, lh, rh, opna
         try:
             x = f(*vs, ix_pass)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation (assign) is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
@@ -2120,67 +2158,67 @@ async def _inplace_operator_step(script:Script, op:_operation_node, lh, rh, opna
         if x is None:
             return ix
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation (assign) is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         return x
 
-def _generate_iadd_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_iadd_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_ih(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         return await _inplace_operator_step(script, op, lh, rh, "iadd", _step)
     script.steps_debug[_step] = op.onode
     return _step
     
 
-def _generate_isub_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_isub_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_ih(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         return await _inplace_operator_step(script, op, lh, rh, "isub", _step)
     script.steps_debug[_step] = op.onode
     return _step
     
 
-def _generate_imlt_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_imlt_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_ih(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         return await _inplace_operator_step(script, op, lh, rh, "imlt", _step)
     script.steps_debug[_step] = op.onode
     return _step
     
 
-def _generate_idiv_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_idiv_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_ih(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         return await _inplace_operator_step(script, op, lh, rh, "idiv", _step)
     script.steps_debug[_step] = op.onode
     return _step
     
 
-def _generate_imod_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_imod_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_ih(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         return await _inplace_operator_step(script, op, lh, rh, "imod", _step)
     script.steps_debug[_step] = op.onode
     return _step
     
-def _generate_dot_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_dot_steps(script:Script, op:operation_node, lh, rh):
     async def _step():
         l = await _resolve_nh(lh)
         r = await _resolve_nh(rh)
@@ -2188,23 +2226,23 @@ def _generate_dot_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_subscript_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_subscript_steps(script:Script, op:operation_node, lh, rh):
     assert rh is None, f"subscript should not be passed a right-hand operand: {rh}"
     pnode = op.onode
     assert isinstance(pnode, ParsingNodeSubscript), ""
     if not pnode.children:
-        raise exceptions.TInvalidOperand(
+        raise exceptions.TCInvalidOperand(
             "subscript takes a value or evaluable expression, got nothing",
             ctx=exceptions.ExceptionContext(pnode)
         )
     elif len(pnode.children) > 1:
-        raise exceptions.TInvalidOperand(
+        raise exceptions.TCInvalidOperand(
             f"subscript does not take multiple expressions (got {len(pnode.children)})",
             ctx=exceptions.ExceptionContext(pnode)
         )
     expr = pnode.children[0]
     if not isinstance(expr, (ParsingNodeParentheses, ParsingNodeExpression)):
-        raise exceptions.TInvalidOperand(
+        raise exceptions.TCInvalidOperand(
             "subcript contents must be a value or result in one",
             ctx=exceptions.ExceptionContext(expr)
         )
@@ -2216,7 +2254,7 @@ def _generate_subscript_steps(script:Script, op:_operation_node, lh, rh):
         if isinstance(item_key, ScriptValue):
             item_key = ScriptVariable(item_key)
         elif not isinstance(item_key, ScriptVariable):
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"subscript contents must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(expr, _resolve_inner)
             )
@@ -2228,11 +2266,11 @@ def _generate_subscript_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_assign_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_assign_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_ih(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must be a variable or attribute", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     
     async def _step():
         l = await _resolve_ih(script, lh, op.onode.parent.children[op.position-1], _step, make_name_if_missing=True, get_attr=True)
@@ -2252,19 +2290,19 @@ def _generate_assign_steps(script:Script, op:_operation_node, lh, rh):
             try:
                 x = f(*vs)
             except NotImplementedError as e:
-                raise exceptions.TNotImplemented(
+                raise exceptions.TRNotImplemented(
                     "operation is not implemented",
                     ctx=exceptions.ExceptionContext(op.onode, _step)
                 ) from e
             except Exception as e:
                 raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
             if x is None:
-                raise exceptions.TMustEvaluate(
+                raise exceptions.TRMustEvaluate(
                     f"operation must evaluate but resulted in no value",
                     ctx=exceptions.ExceptionContext(op.onode, _step)
                 )
             elif x is NotImplemented:
-                raise exceptions.TNotImplemented(
+                raise exceptions.TRNotImplemented(
                     "operation is not implemented",
                     ctx=exceptions.ExceptionContext(op.onode, _step)
                 )
@@ -2272,28 +2310,28 @@ def _generate_assign_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_uadd_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_uadd_steps(script:Script, op:operation_node, lh, rh):
     assert lh is None, f"unary operations should not be passed a left-hand operand: {lh}"
     if not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         h = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = h.type().uadd(h)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2301,28 +2339,28 @@ def _generate_uadd_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
     
-def _generate_usub_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_usub_steps(script:Script, op:operation_node, lh, rh):
     assert lh is None, f"unary operations should not be passed a left-hand operand: {lh}"
     if not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         h = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = h.type().usub(h)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2330,28 +2368,28 @@ def _generate_usub_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_unot_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_unot_steps(script:Script, op:operation_node, lh, rh):
     assert lh is None, f"unary operations should not be passed a left-hand operand: {lh}"
     if not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         h = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = h.type().unot(h)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2360,30 +2398,30 @@ def _generate_unot_steps(script:Script, op:_operation_node, lh, rh):
     return _step
 
 
-def _generate_gt_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_gt_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().gt(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2391,30 +2429,30 @@ def _generate_gt_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_lt_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_lt_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().lt(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2422,30 +2460,30 @@ def _generate_lt_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_ge_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_ge_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().ge(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2453,30 +2491,30 @@ def _generate_ge_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_le_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_le_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().le(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2484,30 +2522,30 @@ def _generate_le_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_eq_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_eq_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().eq(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2515,30 +2553,30 @@ def _generate_eq_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_ne_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_ne_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"right-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().ne(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2546,30 +2584,30 @@ def _generate_ne_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_and_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_and_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_h(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_h(rh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().and_(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2577,30 +2615,30 @@ def _generate_and_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-def _generate_or_steps(script:Script, op:_operation_node, lh, rh):
+def _generate_or_steps(script:Script, op:operation_node, lh, rh):
     if not _validate_vh(lh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     elif not _validate_vh(rh):
-        raise exceptions.TInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
+        raise exceptions.TCInvalidOperand(f"left-hand operand must resolve to a value", ctx=exceptions.ExceptionContext(op.onode))
     async def _step():
         l = await _resolve_h(script, lh, op.onode.parent.children[op.position-1], _step)
         r = await _resolve_h(script, rh, op.onode.parent.children[op.position+1], _step)
         try:
             x = l.type().or_(l, r)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             ) from e
         except Exception as e:
             raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(op.onode, _step))
         if x is None:
-            raise exceptions.TMustEvaluate(
+            raise exceptions.TRMustEvaluate(
                 f"operation must evaluate but resulted in no value",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented(
+            raise exceptions.TRNotImplemented(
                 "operation is not implemented",
                 ctx=exceptions.ExceptionContext(op.onode, _step)
             )
@@ -2608,7 +2646,7 @@ def _generate_or_steps(script:Script, op:_operation_node, lh, rh):
     script.steps_debug[_step] = op.onode
     return _step
 
-_operator_step_generators:dict[str, Callable[[Script, _operation_node, Any, Any], _variable_access|ScriptValue]] = {
+_operator_step_generators:dict[str, Callable[[Script, operation_node, Any, Any], _variable_access|ScriptValue]] = {
     "u[]": _generate_subscript_steps,
     ".": _generate_dot_steps,
     "-u": _generate_usub_steps,

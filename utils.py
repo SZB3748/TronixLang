@@ -308,9 +308,9 @@ _DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot 
 _DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=TypeError)
 _DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=TypeError)
 
-_DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable", error=exceptions.TNotImplemented)
-_DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign value of type {v.type().name} to {"item at" if isinstance(n, script.ScriptVariable) else "attribute"} {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TTypeError)
-_DEFAULT_DELETE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n: f"cannot delete {f"item at value of type {n.type().name}" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TTypeError)
+_DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable", error=exceptions.TRNotImplemented)
+_DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign value of type {v.type().name} to {"item at" if isinstance(n, script.ScriptVariable) else "attribute"} {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRTypeError)
+_DEFAULT_DELETE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n: f"cannot delete {f"item at value of type {n.type().name}" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TRTypeError)
 
 def SimpleGetAttribute(name:str|None=None)->AttributeGetter:
     def f(o:ScriptValue, n:str):
@@ -703,7 +703,7 @@ class ScriptFunctionParam:
             else:
                 tt = script.parse_script_type_annotation(t)
                 if tt is None:
-                    raise exceptions.TMissingName(
+                    raise exceptions.TRMissingName(
                         f"function signature: type or annotation {repr(t)} not defined", t)
                 yield tt
 
@@ -732,12 +732,12 @@ class ScriptFunctionParamSet:
         for i, param in enumerate(self.params):
             if param.default is _PARAM_NO_DEFAULT and not param.pack: #is positional and not pack
                 if got_required_end: #after default args
-                    raise exceptions.TInvalidParameterOrder("cannot have positional parameter after parameter with a default value")
+                    raise exceptions.TRInvalidParameterOrder("cannot have positional parameter after parameter with a default value")
             elif not got_required_end:
                 got_required_end = True
                 index = i
             elif param.pack:
-                raise exceptions.TInvalidParameterOrder("cannot have multiple pack params or a pack parameter after a parameter with a default value")
+                raise exceptions.TRInvalidParameterOrder("cannot have multiple pack params or a pack parameter after a parameter with a default value")
         return len(self.params) if index is None else index
 
 class ScriptFunctionSignature:
@@ -778,11 +778,11 @@ class ScriptFunctionSignature:
                                 break
                         else:
                             if i == len(self.overloads)-1:
-                                raise exceptions.TUnknownParameter(f"unknown parameter with given keyword argument name: {repr(k)}")
+                                raise exceptions.TRUnknownParameter(f"unknown parameter with given keyword argument name: {repr(k)}")
                             else:
                                 all_args_match = False
                         if _p.pack:
-                            raise exceptions.TInvalidParameterOrder(f"cannot keyword assign to pack parameter ({repr(k)})")
+                            raise exceptions.TRInvalidParameterOrder(f"cannot keyword assign to pack parameter ({repr(k)})")
                         ts = list(_p.resolve_types())
                         v = wrap_python_value(v.inner.value)
                     else:
@@ -892,7 +892,7 @@ class ScriptFunction[T]:
     def _get_fit(self, ctx:ScriptContext):
         i, args, kwargs = self.signature.fit(ctx.params)
         if i is None:
-            raise exceptions.TTypeError(f"function has no overloads that match the following arguments: {", ".join(v.type().name for v in ctx.params)}")
+            raise exceptions.TRTypeError(f"function has no overloads that match the following arguments: {", ".join(v.type().name for v in ctx.params)}")
         return self.cbs[i], i, args, kwargs
 
     def __call__(self, ctx:ScriptContext):

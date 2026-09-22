@@ -42,46 +42,111 @@ class TronixException(Exception):
     def help_text(self, s:"script.Script", step:Callable[[], Any]|None=None):
         return None
 
+
+
 class _help_text_info:
-    def __init__(self, context_name:str, line_number:int, c:int, line:str, i:int, i_end:int, line_start:int, line_end:int):
+    def __init__(self, context_name:str, line_number:int, c:int, line:str, line_start:int, line_end:int, underlines:list[tuple[int, str, int, int]]):
         self.context_name = context_name
         self.line_number = line_number
         self.c = c
         self.line = line
-        self.i = i
-        self.i_end = i_end
         self.line_start = line_start
         self.line_end = line_end
+        self.underlines = underlines
 
 def _get_i_end(node:parsingnodes.ParsingNode)->int:
-    i_end = node.ctx.match.end() if node.ctx.i_end is None else node.ctx.i_end
+    if node.ctx.match is None:
+        i_end = node.ctx.i if node.ctx.i_end is None else node.ctx.i_end
+    else:
+        i_end = node.ctx.match.end() if node.ctx.i_end is None else node.ctx.i_end
     for child in node.children:
         x = _get_i_end(child)
         if x > i_end:
             i_end = x
     return i_end
 
-def _get_help_text_info(e:TronixException, s:"script.Script"):
-    i = e._ctx.node.ctx.match.start()
-    while s.raw[i].isspace():
-        i += 1
-    i_end = _get_i_end(e._ctx.node)
-    line_start = s.raw.rfind("\n", 0, i)
-    line_end = s.raw.find("\n", i)
-    if line_start == 0:
-        line_number = 2
-    elif line_start < 0:
-        line_number = 1
-    else:
-        line_number = s.raw.count("\n", 0, line_start-1)+2
-    if line_end < 0:
-        line_end = len(s.raw)
-    line = s.raw[line_start+1:line_end].rstrip()
-    c = i - line_start - 1
-    return _help_text_info(e._ctx.node.ctx.name, line_number, c, line, i, i_end, line_start, line_end)
+def _get_help_text_info(node:parsingnodes.ParsingNode, s:"script.Script", expand_for_operator:bool=False):
+    i = _i = node.ctx.i if node.ctx.match is None else node.ctx.match.start()
+    if expand_for_operator and isinstance(node, parsingnodes.ParsingNodeOperator) and node.ctx.optree is not None:
+        left = node.ctx.optree.lhand
+        while isinstance(left, parsingnodes.operation_node):
+            if left.lhand is None:
+                left = left.rhand
+            else:
+                left = left.lhand
+        right = node.ctx.optree.rhand
+        while isinstance(right, parsingnodes.operation_node):
+            right = right.rhand
 
-def _base_help_text(info:_help_text_info, focus_length:int, error_message):
-    return f"Error running script {info.context_name}\nOn line {info.line_number}, {info.c+1} character{"s"*bool(info.c)} in:\n  {info.line}\n  {" "*info.c}{"^"*focus_length}\n{error_message}"
+        lhti = _get_help_text_info(left, s, expand_for_operator=False)
+        rhti = _get_help_text_info(right, s, expand_for_operator=False)
+        ohti = _get_help_text_info(node, s, expand_for_operator=False)
+
+        i = ohti.underlines[0][2]
+        i_end = ohti.underlines[0][3]
+        j = lhti.underlines[0][2]
+        j_end = rhti.underlines[0][3]
+        return _help_text_info(ohti.context_name, ohti.line_number, ohti.c, ohti.line, ohti.line_start, ohti.line_end, [
+            (1, "^", i-1, i_end+1),
+            (0, "*", j, j_end)
+        ])
+    else:
+        while i < len(s.raw):
+            if s.raw[i].isspace():
+                i += 1
+            else:
+                break
+        else:
+            i = _i
+        i_end = _get_i_end(node)
+        line_start = s.raw.rfind("\n", 0, i)
+        line_end = s.raw.find("\n", i)
+        if line_start == 0:
+            line_number = 2
+        elif line_start < 0:
+            line_number = 1
+        else:
+            line_number = s.raw.count("\n", 0, line_start-1)+2
+        if line_end < 0:
+            line_end = len(s.raw)
+        line_start += 1
+        line = s.raw[line_start:line_end].rstrip()
+        c = i - line_start
+        return _help_text_info(node.ctx.name, line_number, c, line, line_start, line_end, [(0, "^", i, i_end)])
+
+def _underline_generate(ustart:int, uend:int, sorted_u:list[tuple[int, str, int, int]], last="\n"):
+    for i in range(ustart, uend):
+        for _, c, ui, ui_end in sorted_u:
+            if i >= ui and i < ui_end:
+                yield c
+                break
+        else:
+            yield " "
+    yield last
+
+
+def _base_help_text(info:_help_text_info, error_action:str, error_message):
+    if info.underlines:
+        ustart, uend = info.underlines[0][2:4]
+        for i in range(1, len(info.underlines)):
+            u = info.underlines[i]
+            if u[2] < ustart:
+                ustart = u[2]
+            if u[3] > uend:
+                uend = u[3]
+
+        if ustart < info.line_start:
+            ustart = info.line_start
+        if uend > info.line_end:
+            uend = info.line_end
+
+        padding = ustart - info.line_start + 2
+        sorted_u = sorted(info.underlines, key=lambda u: u[0], reverse=True)
+        under = "".join(_underline_generate(ustart, uend, sorted_u))
+    else:
+        padding = 0
+        under = ""
+    return f"Error {error_action} script {info.context_name}\nOn line {info.line_number}, character {info.c+1}:\n  {info.line}\n{" "*padding}{under}{error_message}"
 
 class DuplicateOverloadException(Exception):
     "Overload already exists in function."
@@ -126,55 +191,113 @@ class _TronixRuntimeAssertion(Exception):
 class TParsingException(TronixException): #aka syntax exception
     "Base class for all tronix parsing exceptions."
 
-class TUnknownValue(TParsingException):
+    __TNAME__ = "ParsingException"
+
+    def help_text(self, s:"script.Script", step:Callable[[], Any]|None=None):
+        if self._ctx is None:
+            if step is None or (node := s.steps_debug.get(step, None)) is None:
+                return f"{self.__TNAME__}: {self}"
+            self._set_context(ExceptionContext(node, step))
+        info = _get_help_text_info(self._ctx.node, s)
+        return _base_help_text(info, "parsing", f"{self.__TNAME__}: {self}")
+
+class TPUnknownValue(TParsingException):
     "Could read value but could not determine its type."
 
-class TEnclMismatch(TParsingException):
+    __TNAME__ = "UnknownValue"
+
+class TPEnclMismatch(TParsingException):
     "Enclosing symbols do not match."
 
-class TUnexpectedSymbol(TParsingException):
+    __TNAME__ = "EnclMismatch"
+
+class TPUnexpectedSymbol(TParsingException):
     "Symbol was not expected here."
 
-class TExpectedSymbol(TParsingException):
+    __TNAME__ = "UnexpectedSymbol"
+
+class TPExpectedSymbol(TParsingException):
     "Symbol was expected here."
 
-class TUnexpectedKeyword(TParsingException):
+    __TNAME__ = "ExpectedSymbol"
+
+class TPUnexpectedKeyword(TParsingException):
     "Keyword was not expected here."
 
-class TExpectedKeyword(TParsingException):
-    "Keyword was expected here."
+    __TNAME__ = "UnexpectedKeyword"
 
-class TExpectedEvaluable(TParsingException):
+class TPExpectedEvaluable(TParsingException):
     "Evaluable expression was expected here."
 
-class TExpectedName(TParsingException):
+    __TNAME__ = "ExpectedEvaluable"
+
+class TPExpectedName(TParsingException):
     "Name was expected."
+
+    __TNAME__ = "ExpectedName"
+
+class TPUnexpectedEndOfCode(TParsingException):
+    "Code ended abruptly."
+
+    __TNAME__ = "UnexpectedEndOfCode"
+
+    def help_text(self, s, step=None):
+        if self._ctx is None:
+            if step is None or (node := s.steps_debug.get(step, None)) is None:
+                return f"{self.__TNAME__}: {self}"
+            self._set_context(ExceptionContext(node, step))
+        info = _get_help_text_info(self._ctx.node, s)
+        return _base_help_text(info, "parsing", f"{self.__TNAME__}: {self}", clamp_to_line=False)
 
 
 
 class TCompilationException(TronixException):
     "Base class for all tronix compilation exceptions."
 
-class TIncorrectParamaterOrder(TCompilationException):
+    __TNAME__ = "CompilationException"
+
+    def help_text(self, s, step=None):
+        if self._ctx is None:
+            if step is None or (node := s.steps_debug.get(step, None)) is None:
+                return f"{self.__TNAME__}: {self}"
+            self._set_context(ExceptionContext(node, step))
+        info = _get_help_text_info(self._ctx.node, s)
+        return _base_help_text(info, "compiling", f"{self.__TNAME__}: {self}")
+
+class TCIncorrectParamaterOrder(TCompilationException):
     "Parameter node order is incorrect."
 
-class TInvalidParameter(TCompilationException):
+    __TNAME__ = "IncorrectParameterOrder"
+
+class TCInvalidParameter(TCompilationException):
     "Parameter node cannot be evaluated."
 
-class TIncorrectOperandOrder(TCompilationException):
+    __TNAME__ = "InvalidParameter"
+
+class TCIncorrectOperandOrder(TCompilationException):
     "Operand/operator order is incorrect."
 
-class TInvalidOperand(TCompilationException):
+    __TNAME__ = "IncorrectOperandOrder"
+
+class TCInvalidOperand(TCompilationException):
     "Operand is of invalid node type."
 
-class TIncorrectIfStatement(TCompilationException):
+    __TNAME__ = "InvalidOperand"
+
+class TCIncorrectIfStatement(TCompilationException):
     "Order of ifs/else ifs/elses is incorrect."
 
-class TIncorrentCatchStatement(TCompilationException):
+    __TNAME__ = "IncorrectIfStatement"
+
+class TCIncorrentCatchStatement(TCompilationException):
     "Catch statement does not have at most one name and one codeblock (is incorrent)."
 
-class TInvalidFStringEmbeddedExpression(TCompilationException):
+    __TNAME__ = "IncorrectCatchStatement"
+
+class TCInvalidFStringEmbeddedExpression(TCompilationException):
     "The given f-string embedded expression is not valid."
+
+    __TNAME__ = "InvalidFStringEmbeddedExpression"
 
 
 class TRuntimeException(TronixException):
@@ -187,13 +310,13 @@ class TRuntimeException(TronixException):
             if step is None or (node := s.steps_debug.get(step, None)) is None:
                 return f"{self.__TNAME__}: {self}"
             self._set_context(ExceptionContext(node, step))
-        info = _get_help_text_info(self, s)
-        return _base_help_text(info, min(info.i_end, info.line_end)-info.i, f"{self.__TNAME__}: {self}")
+        info = _get_help_text_info(self._ctx.node, s, expand_for_operator=True)
+        return _base_help_text(info, "running", f"{self.__TNAME__}: {self}")
 
-class TMissingFunction(TRuntimeException):
+class TRMissingFunction(TRuntimeException):
     "Function is not in the function table."
 
-class TMissingName(TRuntimeException):
+class TRMissingName(TRuntimeException):
     "Name is not in any namespace."
 
     __TNAME__ = "MissingName"
@@ -202,44 +325,37 @@ class TMissingName(TRuntimeException):
         super().__init__(message, flags, ctx)
         self.name = name
 
-    # def help_text(self, s, step=None):
-    #     if self._ctx is None:
-    #         if step is None or (node := s.steps_debug.get(step, None)) is None:
-    #             return f"{self.__TNAME__}: {self}"
-    #         self._set_context(ExceptionContext(node, step))
-    #     return _base_help_text(_get_help_text_info(self, s), len(self.name), f"{self.__TNAME__}: {self}")
-
-class TNotImplemented(TRuntimeException):
+class TRNotImplemented(TRuntimeException):
     "Function or operation is not implemented."
 
     __TNAME__ = "NotImplemented"
 
-class TMustEvaluate(TRuntimeException):
+class TRMustEvaluate(TRuntimeException):
     "Function or operation must result in a value."
 
     __TNAME__ = "MustEvaluate"
 
-class TTypeError(TRuntimeException):
+class TRTypeError(TRuntimeException):
     "Expected one type but got another."
 
     __TNAME__ = "TypeError"
 
-class TInvalidParameterOrder(TRuntimeException):
+class TRInvalidParameterOrder(TRuntimeException):
     "Parameter(s) came in wrong order."
 
     __TNAME__ = "InvalidParameterOrder"
 
-class TUnknownParameter(TRuntimeException):
+class TRUnknownParameter(TRuntimeException):
     "Unknown parameter."
 
     __TNAME__ = "UnknownParameter"
 
-class TUserException(TRuntimeException):
+class TRUserException(TRuntimeException):
     "Exception raised by user code."
 
     __TNAME__ = "UserException"
 
-class TBadValue(TRuntimeException):
+class TRBadValue(TRuntimeException):
     "Function received a value it didn't like."
 
     __TNAME__ = "BadValue"
@@ -248,7 +364,7 @@ class TBadValue(TRuntimeException):
         super().__init__(message, flags, ctx)
         self.parameter = parameter
 
-class TWrappedException(TRuntimeException):
+class TRWrappedException(TRuntimeException):
 
     __TNAME__ = "WrappedException"
 
@@ -262,4 +378,4 @@ class TWrappedException(TRuntimeException):
 def wrap(e:Exception, flags:ExceptionFlags=0, ctx:ExceptionContext|None=None):
     if isinstance(e, (TronixException, _TronixRuntimeAssertion)):
         return e
-    return TWrappedException(e, flags=flags, ctx=ctx)
+    return TRWrappedException(e, flags=flags, ctx=ctx)

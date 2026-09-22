@@ -237,10 +237,10 @@ def resolve_index_value(obj:ScriptValue, item:ScriptVariable):
             end = int(v.inner.second)
         except TypeError:
             null_name = utils.script_repr(null)
-            raise exceptions.TTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}|{null_name}, {Integer.name}|{null_name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
+            raise exceptions.TRTypeError(f"{obj.type.name} can only be subscripted by a pair if it is or is convertable to a pair of ({Integer.name}|{null_name}, {Integer.name}|{null_name}), got pair ({script.wrap_python_type(type(v.inner.first)).name}, {script.wrap_python_type(type(v.inner.second)).name})")
         return slice(begin, end)
     else:
-        raise exceptions.TTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
+        raise exceptions.TRTypeError(f"{obj.type.name} must be subscriptied by a {Integer.name} or pair of ({Integer.name}, {Integer.name}), got {utils.script_repr(v)}")
 
 _ListTypeAttrs = utils.ScriptAttributeHandler[list,int](wildcard=utils.ScriptValueAttribute[list, int, Any](""))
 @_ListTypeAttrs.enforce_child_attrs(*utils.ATTR_ATTACH_ATTRS)
@@ -1338,7 +1338,7 @@ class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
             obj.inner.setchild(name, v.inner.__getstate__())
         else:
             smt = script.wrap_python_type(sm)
-            raise exceptions.TTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
+            raise exceptions.TRTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
         return v
         
     def delattr(self, obj, name):
@@ -1363,7 +1363,7 @@ class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
                 instance.__setstate__(result)
                 return wrap_python_value(instance)
         else:
-            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TRTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
     
     def setitem(self, obj, item, value):
         v = value.get()
@@ -1376,10 +1376,10 @@ class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
                 obj.inner.setchild(key.inner, v.inner.__getstate__())
             else:
                 smt = script.wrap_python_type(sm)
-                raise exceptions.TTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
+                raise exceptions.TRTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
             return v
         else:
-            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TRTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
     
     def delitem(self, obj, item):
         key = item.get()
@@ -1393,7 +1393,7 @@ class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
                 instance.__setstate__(result)
                 return wrap_python_value(instance)
         else:
-            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TRTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
         
     def repr(self, value):
         data, _ = value.inner.get_data()
@@ -1424,7 +1424,7 @@ class _JsonProxyNodeType(ScriptDataType[json_proxy.JsonProxyNode]):
             obj.inner.setchild(name, v.inner.__getstate__())
         else:
             smt = script.wrap_python_type(sm)
-            raise exceptions.TTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
+            raise exceptions.TRTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
         return v
         
     def delattr(self, obj, name):
@@ -1449,7 +1449,7 @@ class _JsonProxyNodeType(ScriptDataType[json_proxy.JsonProxyNode]):
                 instance.__setstate__(result)
                 return wrap_python_value(instance)
         else:
-            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TRTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
     
     def setitem(self, obj, item, value):
         v = value.get()
@@ -1462,10 +1462,10 @@ class _JsonProxyNodeType(ScriptDataType[json_proxy.JsonProxyNode]):
                 obj.inner.setchild(key.inner, v.inner.__getstate__())
             else:
                 smt = script.wrap_python_type(sm)
-                raise exceptions.TTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
+                raise exceptions.TRTypeError(f"expected object of type {smt.name}, got object of type {v.type.name}")
             return v
         else:
-            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TRTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
     
     def delitem(self, obj, item):
         key = item.get()
@@ -1479,7 +1479,7 @@ class _JsonProxyNodeType(ScriptDataType[json_proxy.JsonProxyNode]):
                 instance.__setstate__(result)
                 return wrap_python_value(instance)
         else:
-            raise exceptions.TTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
+            raise exceptions.TRTypeError(f"{obj.type.name}[...] expected {String.name} or {Integer.name}, got {key.type.name}")
         
     def repr(self, value):
         v = wrap_python_value(value.inner.resolve())
@@ -1712,13 +1712,13 @@ def string_construct(self, value:ScriptVariable):
     try:
         x = v.type.conv_str(v)
     except NotImplementedError as e:
-        raise exceptions.TNotImplemented(f"str() for {v.type.name} is not implemented") from e
+        raise exceptions.TRNotImplemented(f"str() for {v.type.name} is not implemented") from e
     except Exception as e:
         raise exceptions.wrap(e)
     if x is None:
-        raise exceptions.TMustEvaluate(f"str() for {v.type.name} must evaluate but resulted in no value")
+        raise exceptions.TRMustEvaluate(f"str() for {v.type.name} must evaluate but resulted in no value")
     elif x is NotImplemented:
-        raise exceptions.TNotImplemented(f"str() for {v.type.name} is not implemented")
+        raise exceptions.TRNotImplemented(f"str() for {v.type.name} is not implemented")
     return x
 
 @_BoolType.f_construct.overload(("value", Bool))
@@ -1731,13 +1731,13 @@ def bool_construct(self, value:ScriptVariable):
     try:
         x = v.type.conv_bool(v)
     except NotImplementedError as e:
-        raise exceptions.TNotImplemented(f"bool() for {v.type.name} is not implemented") from e
+        raise exceptions.TRNotImplemented(f"bool() for {v.type.name} is not implemented") from e
     except Exception as e:
         raise exceptions.wrap(e)
     if x is None:
-        raise exceptions.TMustEvaluate(f"bool() for {v.type.name} must evaluate but resulted in no value")
+        raise exceptions.TRMustEvaluate(f"bool() for {v.type.name} must evaluate but resulted in no value")
     elif x is NotImplemented:
-        raise exceptions.TNotImplemented(f"bool() for {v.type.name} is not implemented")
+        raise exceptions.TRNotImplemented(f"bool() for {v.type.name} is not implemented")
     return x
 
 @_NameValuePairType.f_construct.overload(("name", String), ("value", AnyType))
@@ -1780,7 +1780,7 @@ def uuid_construct(self, hex:ScriptVariable[str]):
 def resolve_file_mode(mode:ScriptVariable[str]):
     m = mode.get().inner.lower()
     if m not in ("read", "write", "append"):
-        raise exceptions.TBadValue(f"file mode must be read, write, or append; got {mode.get().inner}")
+        raise exceptions.TRBadValue(f"file mode must be read, write, or append; got {mode.get().inner}")
     return m[0]
 
 @_FileType.f_construct.overload(("path", String), ("mode", String, "read"))
@@ -1923,21 +1923,21 @@ async def list_from_iterator(target:ScriptVariable[_iterator]):
         try:
             n = await n.next()
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented") from e
+            raise exceptions.TRNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented") from e
         except Exception as e:
             raise exceptions.wrap(e)
         if n is NotImplemented:
-            raise exceptions.TNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented")
+            raise exceptions.TRNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented")
         elif n is None:
             break
         try:
             v = await n.get()
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values") from e
+            raise exceptions.TRNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values") from e
         except Exception as e:
             raise exceptions.wrap(e)
         if v is NotImplemented:
-            raise exceptions.TNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values")
+            raise exceptions.TRNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values")
         if isinstance(v, script.ScriptValue):
             v = v.inner
         l.append(v)
@@ -1959,21 +1959,21 @@ async def map_from_iterator(target:ScriptVariable[_iterator[_pair|ScriptNameValu
         try:
             n = await n.next()
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented") from e
+            raise exceptions.TRNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented") from e
         except Exception as e:
             raise exceptions.wrap(e)
         if n is NotImplemented:
-            raise exceptions.TNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented")
+            raise exceptions.TRNotImplemented(f"next() for {utils.script_repr(target.get())} is not implemented")
         elif n is None:
             break
         try:
             v = await n.get()
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values") from e
+            raise exceptions.TRNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values") from e
         except Exception as e:
             raise exceptions.wrap(e)
         if v is NotImplemented:
-            raise exceptions.TNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values")
+            raise exceptions.TRNotImplemented(f"iterator {utils.script_repr(target.get())} does not yield values")
         d[v[0]] = v[1]
     return script.wrap_python_value(d)
 
@@ -2005,7 +2005,7 @@ def function_has(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonPro
     else:
         data = node.get().inner.resolve()
     if not isinstance(data, dict):
-        raise exceptions.TTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
     return ScriptValue(Bool, name.get().inner in data)
 
 @f_has.overload(("node", [JsonNode, JsonProxyRoot]), dict(name="names", dtypes=[String], pack=True))
@@ -2015,7 +2015,7 @@ def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.
     else:
         data = node.get().inner.resolve()
     if not isinstance(data, dict):
-        raise exceptions.TTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
     return ScriptValue(List, [name.get().inner in data for name in names])
 
 @f_has.overload(("node", [JsonNode, JsonProxyRoot]), ("names", List))
@@ -2025,7 +2025,7 @@ def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.
     else:
         data = node.get().inner.resolve()
     if not isinstance(data, dict):
-        raise exceptions.TTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
     return ScriptValue(List, [name in data for name in names])
 
 @f_hasfunc.overload(("name", String), pass_ctx=True)
@@ -2038,7 +2038,7 @@ def function_log(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[
 
 @f_error.overload(dict(name="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, ""))
 def function_error(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
-    raise exceptions.TUserException(f"{sep.get().inner.join((xv:=xi.get()).type.conv_str(xv).inner for xi in x)}{end.get().inner}")
+    raise exceptions.TRUserException(f"{sep.get().inner.join((xv:=xi.get()).type.conv_str(xv).inner for xi in x)}{end.get().inner}")
 
 @f_flush.overload(("flushable", JsonProxyRoot))
 def function_flush_json_proxy_root(flushable:ScriptVariable[json_proxy.JsonProxyRoot]):
@@ -2137,7 +2137,7 @@ def _write_file(file:BinaryIO, ext:str, value:ScriptVariable, mimetype:str=None)
     behavior, types = _write_behaviors.get(mimetype, (_write_file_plaintext, [AnyType]))
     if value.type().issubtype(*types):
         return behavior(file, mimetype, value)
-    raise exceptions.TTypeError(f"expected to write {repr(ext)} file using value of type: {",".join(t.name for t in types)}; got value {value.type().repr(value)} of type {value.type().name}")
+    raise exceptions.TRTypeError(f"expected to write {repr(ext)} file using value of type: {",".join(t.name for t in types)}; got value {value.type().repr(value)} of type {value.type().name}")
 
 @f_read.overload(("path", String))
 def read_file_path(path:ScriptVariable[str]):
@@ -2170,7 +2170,7 @@ def close_file(file:ScriptVariable[_file_wrapper]):
 def list_append_value(target:ScriptVariable[list], value:ScriptVariable):
     v = target.get()
     if v.type.issubtype(List_readonly):
-        raise exceptions.TTypeError("given list is read-only")
+        raise exceptions.TRTypeError("given list is read-only")
     v.inner.append(value.get().inner)
     return v
 
@@ -2206,13 +2206,13 @@ def map_find_value(target:ScriptVariable[dict], value:ScriptVariable):
         try:
             x = v.type.eq(v, mv)
         except NotImplementedError as e:
-            raise exceptions.TNotImplemented("'==' operation is not implemented") from e
+            raise exceptions.TRNotImplemented("'==' operation is not implemented") from e
         except Exception as e:
             raise exceptions.wrap(e)
         if x is None:
-            raise exceptions.TMustEvaluate(f"'==' operation must evaluate but resulted in no value")
+            raise exceptions.TRMustEvaluate(f"'==' operation must evaluate but resulted in no value")
         elif x is NotImplemented:
-            raise exceptions.TNotImplemented("'==' operation is not implemented")
+            raise exceptions.TRNotImplemented("'==' operation is not implemented")
         
         if x.inner:
             return script.wrap_python_value(key)
@@ -2307,11 +2307,11 @@ async def iterator_next(iterator:ScriptVariable[_iterator]):
     try:
         n = await it.next()
     except NotImplementedError as e:
-        raise exceptions.TNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented") from e
+        raise exceptions.TRNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented") from e
     except Exception as e:
         raise exceptions.wrap(e)
     if n is NotImplemented:
-        raise exceptions.TNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented")
+        raise exceptions.TRNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented")
     elif n is None:
         return false
     else:
@@ -2324,21 +2324,21 @@ async def iterator_out_next(iterator:ScriptVariable[_iterator], out:ScriptVariab
     try:
         n = await it.next()
     except NotImplementedError as e:
-        raise exceptions.TNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented") from e
+        raise exceptions.TRNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented") from e
     except Exception as e:
         raise exceptions.wrap(e)
     if n is NotImplemented:
-        raise exceptions.TNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented")
+        raise exceptions.TRNotImplemented(f"next() for {utils.script_repr(iterator.get())} is not implemented")
     elif n is None:
         return false
     try:
         v = await n.get()
     except NotImplementedError as e:
-        raise exceptions.TNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values") from e
+        raise exceptions.TRNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values") from e
     except Exception as e:
         raise exceptions.wrap(e)
     if v is NotImplemented:
-        raise exceptions.TNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values")
+        raise exceptions.TRNotImplemented(f"iterator {utils.script_repr(iterator.get())} does not yield values")
     iterator.assign(script.wrap_python_value(n))
     out.assign(script.wrap_python_value(v))
     return true
@@ -2349,11 +2349,11 @@ async def iterator_reset(target:ScriptVariable[_iterator]):
     try:
         n = await it.inner.reset()
     except NotImplementedError as e:
-        raise exceptions.TNotImplemented(f"reset() for {utils.script_repr(it)} is not implemented") from e
+        raise exceptions.TRNotImplemented(f"reset() for {utils.script_repr(it)} is not implemented") from e
     except Exception as e:
         raise exceptions.wrap(e)
     if n is NotImplemented:
-        raise exceptions.TNotImplemented(f"reset() for {utils.script_repr(it)} is not implemented")
+        raise exceptions.TRNotImplemented(f"reset() for {utils.script_repr(it)} is not implemented")
     elif n is None:
         return false
     n = script.wrap_python_value()
@@ -2365,7 +2365,7 @@ def delete_name(ctx:ScriptContext, name:ScriptVariable[str]):
     n = name.get().inner
     v = ctx.stack.pop_name(n)
     if v is None:
-        raise exceptions.TMissingName(f"Could not find name to delete: {repr(n)}", n)
+        raise exceptions.TRMissingName(f"Could not find name to delete: {repr(n)}", n)
     return v
 
 @f_delete.overload(("value", [AnyType, NamePair]), ("key_or_index", [AnyType, NamePair]))

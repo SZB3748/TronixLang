@@ -71,25 +71,10 @@ SCRIPT_FUNCTION_TABLE["test_exception"] = test_exception
 SCRIPT_FUNCTION_TABLE["rolist"] = f_rolist
 
 raw = r"""
-l = list(iterate_over_range(0,5))
-log(l)
-next(l[0])
-log(l)
-
-p = pair(iterate_over(l), 2)
-log(p)
-next(p.first)
-log(p)
-
-rol = rolist(l)
-log(rol)
-"
-next(rol[0])
-log(rol)
-"
-
-append(rol, 2)
-log(rol)
+x = 2
+y = map()
+z = list()
+w = (x + y * z)
 """
 
 
@@ -102,20 +87,10 @@ print("="*20)
 print("parsing")
 pstart = time.perf_counter_ns()
 try:
-    p = s.parse()
+    p = s.parse("TEST")
 except exceptions.TParsingException as e:
+    print(utils.generate_exception_help(s, e))
     traceback.print_exception(e)
-    i, m = e.target
-    if m is None:
-        if i is None:
-            span = raw
-        else:
-            span = raw[i-10:i+10]
-    else:
-        span = raw[i+m.start():i+m.end()]
-    print("position", i)
-    print(repr(span))
-    print(f"{type(e).__name__}: {e}")
     exit(-1)
 pend = time.perf_counter_ns()
 
@@ -154,9 +129,13 @@ if __name__ == "__main__":
     SCRIPT_GLOBAL_SCOPE["configs"] = ScriptVariable(wrap_python_value(configs))
 
     print("\ncompiling")
-    cstart = time.perf_counter_ns()
-    s.compile(p)
-    cend = time.perf_counter_ns()
+    try:
+        cstart = time.perf_counter_ns()
+        s.compile(p)
+        cend = time.perf_counter_ns()
+    except exceptions.TronixException as e:
+        print(utils.generate_exception_help(s, e))
+        raise
     print("compiled:", cend - cstart, cstart, cend)
 
 
