@@ -52,10 +52,12 @@ def remove_type(dt:ScriptDataType):
     if var is not None and var.get().inner is dt.inner:
         del script.SCRIPT_GLOBAL_SCOPE[dt.name]
 
-def merge_function(name:str, f:Callable[[ScriptContext], Any]):
-    current = script.SCRIPT_FUNCTION_TABLE.get(name, None)
+def merge_function(name:str, f:Callable[[ScriptContext], Any], functions:FunctionTable|None=None):
+    if functions is None:
+        functions = script.SCRIPT_FUNCTION_TABLE
+    current = functions.get(name, None)
     if current is None:
-        script.SCRIPT_FUNCTION_TABLE[name] = f
+        functions[name] = f
         return f
     elif isinstance(current, ScriptFunction):
         if isinstance(f, ScriptFunction):
@@ -66,22 +68,24 @@ def merge_function(name:str, f:Callable[[ScriptContext], Any]):
         return current
     elif isinstance(f, ScriptFunction):
         f.overload(auto=True, priority=0)(current)
-        script.SCRIPT_FUNCTION_TABLE[name] = f
+        functions[name] = f
         return f
     else:
         x = ScriptFunction()
         x.overload(auto=True)(current)
         x.overload(auto=True)(f)
-        script.SCRIPT_FUNCTION_TABLE[name] = x
+        functions[name] = x
         return x
 
-def remove_function(name:str, f:Callable[[ScriptContext], Any]|None=None):
+def remove_function(name:str, f:Callable[[ScriptContext], Any]|None=None, functions:FunctionTable|None=None):
+    if functions is None:
+        functions = script.SCRIPT_FUNCTION_TABLE
     if f is None:
-        return script.SCRIPT_FUNCTION_TABLE.pop(name, None)
+        return functions.pop(name, None)
     else:
-        x = script.SCRIPT_FUNCTION_TABLE.get(name,None)
+        x = functions.get(name,None)
         if x is f:
-            del script.SCRIPT_FUNCTION_TABLE[name]
+            del functions[name]
         elif isinstance(x, ScriptFunction):
             if isinstance(f, ScriptFunction):
                 i = 0
@@ -113,10 +117,10 @@ def remove_function(name:str, f:Callable[[ScriptContext], Any]|None=None):
                     else:
                         i += 1
             if not x.cbs:
-                del script.SCRIPT_FUNCTION_TABLE[name]
+                del functions[name]
         elif isinstance(f, ScriptFunction):
             if len(f.cbs) == 1 and f.cbs[0] is x:
-                del script.SCRIPT_FUNCTION_TABLE[name]
+                del functions[name]
             else:
                 return None
         else:
@@ -717,9 +721,10 @@ class ScriptFunctionParam:
         return super().__eq__(other)
 
 class ScriptFunctionParamSet:
-    def __init__(self, params:list[ScriptFunctionParam], pass_ctx:bool=False):
+    def __init__(self, params:list[ScriptFunctionParam], pass_ctx:bool=False, pass_fit:bool=False):
         self.params = params
         self.pass_ctx = pass_ctx
+        self.pass_fit = pass_fit
 
     def __eq__(self, other):
         if isinstance(other, ScriptFunctionParamSet):
@@ -740,11 +745,21 @@ class ScriptFunctionParamSet:
                 raise exceptions.TRInvalidParameterOrder("cannot have multiple pack params or a pack parameter after a parameter with a default value")
         return len(self.params) if index is None else index
 
+class script_function_signature_fit:
+
+    __slots__ = "overload_i", "args", "arg_names", "kwargs"
+
+    def __init__(self, overload_i:int, args:list[ScriptVariable], arg_names:str, kwargs:dict[str, ScriptVariable]):
+        self.overload_i = overload_i
+        self.args = args
+        self.arg_names = arg_names
+        self.kwargs = kwargs
+
 class ScriptFunctionSignature:
     def __init__(self, overloads:list[ScriptFunctionParamSet]):
         self.overloads = overloads
 
-    def fit(self, args:list[ScriptVariable])->tuple[int, list[ScriptVariable], dict[str, ScriptVariable]]|tuple[None,None,None]:
+    def fit(self, args:list[ScriptVariable])->script_function_signature_fit|None:
         npair = DATA_TYPE_TABLE[script.ScriptNameValuePair]
         for i, overload in enumerate(self.overloads):
             l = overload.check()-1
@@ -755,6 +770,7 @@ class ScriptFunctionSignature:
             all_args_match = True
             positional_parameters_encountered = 0
             rtv_args = []
+            rtv_arg_names = []
             rtv_kwargs = {}
 
             once = True
@@ -797,6 +813,7 @@ class ScriptFunctionSignature:
 
                     if k is None: #positional
                         rtv_args.append(arg)
+                        rtv_arg_names.append(p.name)
                         if not p.pack:
                             positional_parameters_encountered += 1
                     else: #keyword
@@ -815,8 +832,8 @@ class ScriptFunctionSignature:
                         continue
                     if p.default is not _PARAM_NO_DEFAULT:
                         rtv_kwargs.setdefault(p.name, ScriptVariable(wrap_python_value(p.default)))
-                return i, rtv_args, rtv_kwargs
-        return None, None, None
+                return script_function_signature_fit(i, rtv_args, rtv_arg_names, rtv_kwargs)
+        return None
 
 ScriptFunctionParam_Like = ScriptFunctionParam|str|tuple[str]|tuple[str, str|ScriptDataType|ScriptTypeAnnotation|type|list[str|ScriptDataType|ScriptTypeAnnotation|type]]|dict[str]
 
@@ -876,7 +893,7 @@ class ScriptFunction[T]:
             self.cbs.insert(priority, cb)
 
 
-    def overload(self, *params:ScriptFunctionParam_Like, auto:bool=False, pass_ctx:bool=False, priority:int|None=None):
+    def overload(self, *params:ScriptFunctionParam_Like, auto:bool=False, pass_ctx:bool=False, priority:int|None=None, pass_fit:bool=False):
         def decor(cb:Callable[..., ScriptValue]):
             if auto and not params:
                 ... #TODO inspect function and determine types from annotations
@@ -885,22 +902,26 @@ class ScriptFunction[T]:
                 AnyType = script.DATA_TYPE_TABLE[object]
                 for p in params:
                     plist.append(_resolve_script_function_param_like(p, AnyType))
-                self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx), cb, priority=priority)
+                self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx, pass_fit=pass_fit), cb, priority=priority)
             return cb
         return decor
     
     def _get_fit(self, ctx:ScriptContext):
-        i, args, kwargs = self.signature.fit(ctx.params)
-        if i is None:
+        fit = self.signature.fit(ctx.params)
+        if fit is None:
             raise exceptions.TRTypeError(f"function has no overloads that match the following arguments: {", ".join(v.type().name for v in ctx.params)}")
-        return self.cbs[i], i, args, kwargs
+        return fit
 
     def __call__(self, ctx:ScriptContext):
-        cb, i, args, kwargs = self._get_fit(ctx)
-        if self.signature.overloads[i].pass_ctx:
-            return cb(ctx, *args, **kwargs)
+        fit = self._get_fit(ctx)
+        cb = self.cbs[fit.overload_i]
+        overload = self.signature.overloads[fit.overload_i]
+        if overload.pass_fit:
+            return cb(ctx, self, fit)
+        elif overload.pass_ctx:
+            return cb(ctx, *fit.args, **fit.kwargs)
         else:
-            return cb(*args, **kwargs)
+            return cb(*fit.args, **fit.kwargs)
         
 class BoundScriptFunction[T](ScriptFunction[T]):
     def __init__(self, instance:T):
