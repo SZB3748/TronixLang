@@ -734,15 +734,19 @@ class ScriptFunctionParamSet:
     def check(self):
         got_required_end = False
         index = None
+        names = set()
         for i, param in enumerate(self.params):
             if param.default is _PARAM_NO_DEFAULT and not param.pack: #is positional and not pack
                 if got_required_end: #after default args
-                    raise exceptions.TRInvalidParameterOrder("cannot have positional parameter after parameter with a default value")
+                    raise exceptions.InvalidOverloadException("cannot have positional parameter after parameter with a default value")
             elif not got_required_end:
                 got_required_end = True
                 index = i
             elif param.pack:
-                raise exceptions.TRInvalidParameterOrder("cannot have multiple pack params or a pack parameter after a parameter with a default value")
+                raise exceptions.InvalidOverloadException("cannot have multiple pack params or a pack parameter after a parameter with a default value")
+            if param.name in names:
+                raise exceptions.InvalidOverloadException(f"overload has multiple parameters with name: {param.name}")
+            names.add(param.name)
         return len(self.params) if index is None else index
 
 class script_function_signature_fit:

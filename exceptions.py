@@ -148,7 +148,10 @@ def _base_help_text(info:_help_text_info, error_action:str, error_message):
         under = ""
     return f"Error {error_action} script {info.context_name}\nOn line {info.line_number}, character {info.c+1}:\n  {info.line}\n{" "*padding}{under}{error_message}"
 
-class DuplicateOverloadException(Exception):
+class InvalidOverloadException(Exception):
+    "Overload is not valid."
+
+class DuplicateOverloadException(InvalidOverloadException):
     "Overload already exists in function."
 
 class TraitMergeException(Exception):
