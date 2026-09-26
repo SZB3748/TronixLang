@@ -113,15 +113,19 @@ def parse_script_type_annotation(s:str):
         if t is None:
             if name == "null":
                 return DATA_TYPE_TABLE[type(None)]
-            raise exceptions.AnnotationUnknownTypeException(f"Unknown type: {name}", type_name=name)
+            at = _TYPE_ANNOTATIONS.get(name, None)
+            if at is None:
+                raise exceptions.AnnotationUnknownTypeException(f"Unknown type: {name}", type_name=name)
+            return at.parse("")
         return t
-    at = _TYPE_ANNOTATIONS.get(name, None)
-    if at is None:
-        raise exceptions.UnknownAnnotationException(f"Unknown annotation: {name}", name=name)
-    end = s.rfind("]")
-    if end == -1 or any(not c.isspace() for c in s[end+1:]):
-        raise exceptions.AnnotationEnclosureException("Type annotation was not closed")
-    return at.parse(s[m.endpos:end-1])
+    else:
+        at = _TYPE_ANNOTATIONS.get(name, None)
+        if at is None:
+            raise exceptions.UnknownAnnotationException(f"Unknown annotation: {name}", name=name)
+        end = s.rfind("]")
+        if end == -1 or any(not c.isspace() for c in s[end+1:]):
+            raise exceptions.AnnotationEnclosureException("Type annotation was not closed")
+        return at.parse(s[m.endpos:end-1])
 
 _TA_ENCL_STARTS = "[("
 _TA_ENCL_ENDS = "])"

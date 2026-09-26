@@ -298,19 +298,19 @@ class ScriptAttributeNoAccess[T, K, U]:
 def __error_repr_attr_key(n:str|ScriptVariable):
     return script_repr(n.get()) if isinstance(n, script.ScriptVariable) else repr(n)
 
-_DEFAULT_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is get-only", error=TypeError)
-_DEFAULT_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is assign-only", error=TypeError)
-_DEFAULT_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is delete-only", error=TypeError)
-_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=TypeError)
-_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=TypeError)
-_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=TypeError)
+_DEFAULT_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is get-only", error=exceptions.TRNotImplemented)
+_DEFAULT_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is assign-only", error=exceptions.TRNotImplemented)
+_DEFAULT_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is delete-only", error=exceptions.TRNotImplemented)
+_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRNotImplemented)
+_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRNotImplemented)
+_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRNotImplemented)
 
-_DEFAULT_ITEM_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is get-only", error=TypeError)
-_DEFAULT_ITEM_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is assign-only", error=TypeError)
-_DEFAULT_ITEM_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is delete-only", error=TypeError)
-_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=TypeError)
-_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=TypeError)
+_DEFAULT_ITEM_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is get-only", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is assign-only", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is delete-only", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=exceptions.TRNotImplemented)
 
 _DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable", error=exceptions.TRNotImplemented)
 _DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign value of type {v.type().name} to {"item at" if isinstance(n, script.ScriptVariable) else "attribute"} {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRTypeError)
@@ -579,7 +579,7 @@ class ScriptAttributeHandler[T,K]:
                 if not (attr is None or attr._get is None):
                     return attr._get(object, name)
                 p = p.parent
-            raise AttributeError(f"{object.type.name} object has no attribute {repr(name)}")
+            raise exceptions.TRBadAttribute(f"{object.type.name} object has no attribute {repr(name)}", name=name)
         return getattr
     
     def func_getitem(self):
@@ -591,7 +591,7 @@ class ScriptAttributeHandler[T,K]:
                 if not (attr is None or attr._getitem is None):
                     return attr._getitem(object, key)
                 p = p.parent
-            raise LookupError(key.type().repr(key.get()).inner)
+            raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
         return getitem
 
     def func_set(self):
@@ -603,7 +603,7 @@ class ScriptAttributeHandler[T,K]:
                     if attr._set is not None:
                         return attr._set(object, name, value)
                 p = p.parent
-            raise AttributeError(f"{object.type.name} object has no attribute {repr(name)}")
+            raise exceptions.TRBadAttribute(f"{object.type.name} object has no attribute {repr(name)}", name=name)
         return setattr
     
     def func_setitem(self):
@@ -615,7 +615,7 @@ class ScriptAttributeHandler[T,K]:
                 if not (attr is None or attr._setitem is None):
                     return attr._setitem(object, key, value)
                 p = p.parent
-            raise LookupError(key.type().repr(key.get()).inner)
+            raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
         return setitem
     
     def func_del(self):
@@ -627,11 +627,11 @@ class ScriptAttributeHandler[T,K]:
                     if attr._del is not None:
                         return attr._del(object, name)
                 p = p.parent
-            raise AttributeError(f"{object.type.name} object has no attribute {repr(name)}")
+            raise exceptions.TRBadAttribute(f"{object.type.name} object has no attribute {repr(name)}", name=name)
         return delattr
     
     def func_delitem(self):
-        def getitem(_, object:ScriptValue[T], key:ScriptVariable[K]):
+        def delitem(_, object:ScriptValue[T], key:ScriptVariable[K]):
             p = self
             keyx = key.get().inner
             while p is not None:
@@ -639,8 +639,8 @@ class ScriptAttributeHandler[T,K]:
                 if not (attr is None or attr._delitem is None):
                     return attr._delitem(object, key)
                 p = p.parent
-            raise LookupError(key.type().repr(key.get()).inner)
-        return getitem
+            raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
+        return delitem
     
     def make_funcs(self):
         return self.func_get(), self.func_set(), self.func_del(), self.func_getitem(), self.func_setitem(), self.func_delitem()
@@ -878,10 +878,11 @@ class ScriptFunction[T]:
         self.signature = ScriptFunctionSignature([])
         self.cbs:list[Callable[..., ScriptValue]] = []
 
-    def __get__(self, instance, owner)->"BoundScriptFunction[T]":
+    def __get__(self, instance:T|None, owner:type[T])->"BoundScriptFunction[T]":
         b = BoundScriptFunction.__new__(BoundScriptFunction)
         b.__dict__.update(self.__dict__)
         b.instance = instance
+        b.owner = owner
         return b
 
     def add_overload(self, params:ScriptFunctionParamSet, cb:Callable[..., ScriptValue], priority:int|None=None):
@@ -928,16 +929,21 @@ class ScriptFunction[T]:
             return cb(*fit.args, **fit.kwargs)
         
 class BoundScriptFunction[T](ScriptFunction[T]):
-    def __init__(self, instance:T):
+    def __init__(self, instance:T|None, owner:type[T]):
         super().__init__()
         self.instance = instance
+        self.owner:type[T] = owner
 
     def __call__(self, ctx:ScriptContext):
-        cb, i, args, kwargs = self._get_fit(ctx)
-        if self.signature.overloads[i].pass_ctx:
-            return cb(self.instance, ctx, *args, **kwargs)
+        fit = self._get_fit(ctx)
+        cb = self.cbs[fit.overload_i]
+        overload = self.signature.overloads[fit.overload_i]
+        if overload.pass_fit:
+            return cb(self.instance, ctx, self, fit)
+        elif overload.pass_ctx:
+            return cb(self.instance, ctx, *fit.args, **fit.kwargs)
         else:
-            return cb(self.instance, *args, **kwargs)
+            return cb(self.instance, *fit.args, **fit.kwargs)
 
 _TRAIT_EXTRA_NAMES = "name", "dtypes", "default", "pack"
 

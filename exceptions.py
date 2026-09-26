@@ -328,6 +328,24 @@ class TRMissingName(TRuntimeException):
         super().__init__(message, flags, ctx)
         self.name = name
 
+class TRBadAttribute(TRuntimeException):
+    "Object does not like the specified attribute."
+
+    __TNAME__ = "BadAttribute"
+
+    def __init__(self, message:str, name:str, flags:ExceptionFlags=0, ctx:ExceptionContext=None):
+        super().__init__(message, flags, ctx)
+        self.name = name
+
+class TRBadSubscript(TRuntimeException):
+    "Object does not like being subscripted with this value."
+
+    __TNAME__ = "BadAttribute"
+
+    def __init__(self, message:str, value:"script.ScriptVariable", flags:ExceptionFlags=0, ctx:ExceptionContext=None):
+        super().__init__(message, flags, ctx)
+        self.value = value
+
 class TRNotImplemented(TRuntimeException):
     "Function or operation is not implemented."
 
