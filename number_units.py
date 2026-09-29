@@ -22,6 +22,9 @@ class percent:
     def __float__(self):
         return float(self.value)
 
+    def __hash__(self):
+        return hash(self.value)
+
     def __eq__(self, value):
         if isinstance(value, percent):
             return self.value == value.value
@@ -176,6 +179,9 @@ class degrees:
         elif isinstance(other, radians):
             return self.value >= math.degrees(other.value)
         return self.value >= other
+
+    def __hash__(self):
+        return hash(self.value)
     
     def __add__(self, other):
         if isinstance(other, degrees):
@@ -279,6 +285,9 @@ class radians:
 
     def __repr__(self):
         return f"{self.value/math.pi}πrad"
+
+    def __hash__(self):
+        return hash(self.value)
 
     def __eq__(self, value):
         if isinstance(value, radians):

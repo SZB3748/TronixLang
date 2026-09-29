@@ -101,7 +101,7 @@ class ScriptTypeAnnotation:
 
 _TYPE_ANNOTATIONS:dict[str, type[ScriptTypeAnnotation]] = {}
 
-RE_TYPE_ANNOTATION_START = re.compile(f"\\s*(P<name>{PATTERN_NAME})\\s*(?:(P<annotation_start>\\[)|\\s*$)")
+RE_TYPE_ANNOTATION_START = re.compile(f"\\s*(?P<name>{PATTERN_NAME})\\s*(?:(?P<annotation_start>\\[)|\\s*$)")
 def parse_script_type_annotation(s:str):
     m = RE_TYPE_ANNOTATION_START.match(s)
     if m is None:

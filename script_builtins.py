@@ -895,6 +895,57 @@ class AllTypes(script.ScriptTypeAnnotation):
     def format_data(self):
         return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
 
+class AnyTypes(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "any_types"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, ",|")
+        return cls(*(script.parse_script_type_annotation(part) for part in parts))
+
+    def __init__(self, *types:script.ScriptDataType|script.ScriptTypeAnnotation|type|str):
+        if not types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
+        self.types = list(types)
+        self._resolved = False
+
+    def _resolve_types(self)->list[ScriptDataType|ScriptTypeAnnotation]:
+        if not self._resolved:
+            for i, t in enumerate(self.types):
+                if isinstance(t, str):
+                    self.types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.types[i] = script.wrap_python_type(t)
+            self._resolved = True
+        return self.types
+
+    def __eq__(self, other):
+        if isinstance(other, AnyTypes):
+            return len(self._resolve_types()) == len(other._resolve_types()) and all(t in other.types for t in self.types)
+        elif isinstance(other, script.ScriptDataType):
+            return any(other.issubtype(t) for t in self._resolve_types())
+        elif isinstance(other, ScriptTypeAnnotation):
+            return any(other == t for t in self._resolve_types())
+        else:
+            return False
+
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            x = other.inner
+        else:
+            x = other
+        for t in self._resolve_types():
+            if isinstance(t, script.ScriptDataType):
+                if isinstance(x, t.inner):
+                    return True
+            elif t.compare(x):
+                return True
+        return False
+
+    def format_data(self):
+        return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+
 
 
 _ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_wrapper,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
@@ -1513,6 +1564,15 @@ class _DurationBaseType[T:durtypes._duration](script.ScriptDataType[T]):
     
     def deserialize(self, x):
         return self.inner(x)
+
+    def add(self, lhs, rhs):
+        r = rhs.get()
+        if r.type.issubtype(Datetime):
+            x = lhs.get().inner
+            delta = timedelta(seconds=x.x * durtypes._unitspace_convert(durtypes._seconds_duration.FACTOR, durtypes._seconds_duration.POWER, x.FACTOR, x.POWER))
+            return script.wrap_python_value(r.inner + delta)
+        else:
+            super().add(lhs, rhs)
     
 
 class _NanoSecondsType(_DurationBaseType[durtypes._nanoseconds_duration]):
@@ -1580,6 +1640,15 @@ class _ComplexDurationType(script.ScriptDataType[durtypes._complex_duration]):
     attrs.entry("as_milliseconds").readonly(utils.MethodGetAttribute())
     attrs.entry("as_microseconds").readonly(utils.MethodGetAttribute())
     attrs.entry("as_nanoseconds").readonly(utils.MethodGetAttribute())
+
+    def add(self, lhs, rhs):
+        r = rhs.get()
+        if r.type.issubtype(Datetime):
+            y = lhs.get().inner
+            delta = timedelta(seconds=y.as_seconds().x)
+            return script.wrap_python_value(r.inner + delta)
+        else:
+            super().add(lhs, rhs)
 
 
 class _PercentType(script.ScriptDataType[numunits.percent]):
@@ -2409,6 +2478,7 @@ def activate():
     Iterator_Of = utils.add_python_type(IteratorOf, override_names=IteratorOf.ANNOTATION_NAME)
     Not_Type = utils.add_python_type(NotType, override_names=NotType.ANNOTATION_NAME)
     All_Types = utils.add_python_type(AllTypes, override_names=AllTypes.ANNOTATION_NAME)
+    Any_Types = utils.add_python_type(AnyTypes, override_names=AnyTypes.ANNOTATION_NAME)
 
     add_read_behavior("application/json", _read_file_json)
     add_write_behavior("application/json", _write_file_json)
@@ -2467,6 +2537,7 @@ def deactivate():
     utils.remove_type(Iterator_Of)
     utils.remove_type(Not_Type)
     utils.remove_type(All_Types)
+    utils.remove_type(Any_Types)
 
     remove_read_behavior("application/json", _read_file_json)
     remove_write_behavior("application/json", _write_file_json)
