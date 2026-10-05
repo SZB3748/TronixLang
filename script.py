@@ -127,6 +127,15 @@ def parse_script_type_annotation(s:str):
             raise exceptions.AnnotationEnclosureException("Type annotation was not closed")
         return at.parse(s[m.endpos:end-1])
 
+def format_script_type_annotation(t:"ScriptDataType|ScriptTypeAnnotation"):
+    if isinstance(t, ScriptDataType):
+        return t.name
+    fparams = t.format_data()
+    if fparams:
+        return f"{t.ANNOTATION_NAME}[{fparams}]"
+    else:
+        return t.ANNOTATION_NAME
+
 _TA_ENCL_STARTS = "[("
 _TA_ENCL_ENDS = "])"
 def split_type_annotation_contents(s:str, seps:str):
@@ -1702,11 +1711,11 @@ class Script:
             self.steps_stack = step_stack_node(self.steps_stack, init_steps)
             for n in init_nodes:
                 assert isinstance(n, ParsingNodeLoopExpression), f"loop init node must be loop expression, got: {n}"
-                assert len(n.children) == 1 and isinstance(node.children[0], (ParsingNodeExpression, ParsingNodeParentheses, ParsingNodeVarDecl)), f"loop expression node must contain one expression, got: {node.children}"
+                assert len(n.children) == 1 and isinstance(n.children[0], (ParsingNodeExpression, ParsingNodeParentheses, ParsingNodeVarDecl)), f"loop expression node must contain one child, got: {n.children}"
                 child = n.children[0]
                 if isinstance(child, ParsingNodeVarDecl):
                     self._generate_vardecl_step(child, self.scope if child.kw == "var" else self.stack.ns if child.kw == "define" else self.global_scope)
-                self._generate_expression_steps(n.children[0])
+                self._generate_expression_steps(child)
             self.steps_stack = self.steps_stack.parent
 
         if condition_node is None:

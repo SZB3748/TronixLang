@@ -12,7 +12,8 @@ import sys
 from typing import BinaryIO, IO, Iterable, Literal, Sequence
 import uuid
 
-_TypeTypeAttrs = utils.ScriptAttributeHandler[type,Any](no_subscripting=True)
+
+_TypeTypeAttrs = utils.ScriptAttributeHandler[type,Any]()
 @_TypeTypeAttrs.enforce_child_attrs()
 @_TypeTypeAttrs.attach
 class _TypeType(ScriptDataType[type]):
@@ -21,6 +22,9 @@ class _TypeType(ScriptDataType[type]):
     construct = f_construct
 
     attrs = _TypeTypeAttrs
+    attrs.wildcard = utils.ScriptValueAttribute[type,Any,Any]("")\
+                            .getter(attrs.handle_type_get).setter(attrs.handle_type_set).deleter(attrs.handle_type_del)\
+                            .itemgetter(attrs.handle_type_getitem).itemsetter(attrs.handle_type_setitem).itemdeleter(attrs.handle_type_delitem)
     attrs.entry("name").readonly(lambda o, n: script.wrap_python_value(script.DATA_TYPE_TABLE[o.inner].name))
     
     def repr(self, value):
@@ -38,7 +42,7 @@ class _TypeAnnotationType(ScriptDataType[ScriptTypeAnnotation]):
     attrs.entry("annotation_name").readonly(lambda o,n: script.wrap_python_value(o.inner.ANNOTATION_NAME))
 
     def repr(self, value):
-        return script.ScriptValue(String, f"<type annotation {value.inner.ANNOTATION_NAME}[{value.inner.format_data()}]>")
+        return script.ScriptValue(String, f"<type annotation {script.format_script_type_annotation(value.inner)}>")
 
 _NullTypeAttrs = utils.ScriptAttributeHandler[None,Any](no_subscripting=True)
 @_NullTypeAttrs.enforce_child_attrs()
@@ -92,6 +96,16 @@ class _StringType(ScriptDataType[str]):
     construct = f_construct
     
     attrs = _StringTypeAttrs
+
+
+    attrs.type_entry("WHITESPACE").readonly(utils.ValueGetAttribute(string.whitespace))
+    attrs.type_entry("LOWERCASE").readonly(utils.ValueGetAttribute(string.ascii_lowercase))
+    attrs.type_entry("UPPERCASE").readonly(utils.ValueGetAttribute(string.ascii_uppercase))
+    attrs.type_entry("LETTERS").readonly(utils.ValueGetAttribute(string.ascii_letters))
+    attrs.type_entry("DIGITS").readonly(utils.ValueGetAttribute(string.digits))
+    attrs.type_entry("SYMBOLS").readonly(utils.ValueGetAttribute(string.punctuation))
+    attrs.type_entry("PRINTABLE").readonly(utils.ValueGetAttribute(string.printable))
+
     attrs.wildcard = utils.ScriptValueAttribute("").itemreadonly(utils.SimpleGetItem())
     attrs.entry("capitalized").readonly(utils.MethodGetAttribute("capitalize"))
     attrs.entry("casefolded").readonly(utils.MethodGetAttribute("casefold"))
@@ -547,7 +561,7 @@ class ListOf(script.ScriptTypeAnnotation):
         return True
     
     def format_data(self):
-        return " | ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+        return " | ".join(script.format_script_type_annotation(t) for t in self._resolve_types())
     
 
 class MapOf(script.ScriptTypeAnnotation):
@@ -572,7 +586,7 @@ class MapOf(script.ScriptTypeAnnotation):
         if not self.value_types:
             self.value_types.append(script.BASE_TYPE)
 
-    def _resolve_keys(self):
+    def _resolve_keys(self)->list[script.ScriptDataType|script.ScriptTypeAnnotation]:
         if not self._resolved_keys:
             for i, t in enumerate(self.key_types):
                 if isinstance(t, str):
@@ -582,7 +596,7 @@ class MapOf(script.ScriptTypeAnnotation):
             self._resolved_keys = True
         return self.key_types
 
-    def _resolve_values(self):
+    def _resolve_values(self)->list[script.ScriptDataType|script.ScriptTypeAnnotation]:
         if not self._resolved_values:
             for i, t in enumerate(self.value_types):
                 if isinstance(t, str):
@@ -634,8 +648,8 @@ class MapOf(script.ScriptTypeAnnotation):
         return True
     
     def format_data(self):
-        keystr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_keys())
-        valstr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_values())
+        keystr = "|".join(script.format_script_type_annotation for t in self._resolve_keys())
+        valstr = "|".join(script.format_script_type_annotation for t in self._resolve_values())
         return f"{keystr}, {valstr}"
 
 class PairOf(script.ScriptTypeAnnotation):
@@ -660,7 +674,7 @@ class PairOf(script.ScriptTypeAnnotation):
         if not self.second_types:
             self.second_types = self.first_types.copy()
 
-    def _resolve_first(self):
+    def _resolve_first(self)->list[script.ScriptDataType|script.ScriptTypeAnnotation]:
         if not self._resolved_first:
             for i, t in enumerate(self.first_types):
                 if isinstance(t, str):
@@ -670,7 +684,7 @@ class PairOf(script.ScriptTypeAnnotation):
             self._resolved_first = True
         return self.first_types
     
-    def _resolve_second(self):
+    def _resolve_second(self)->list[script.ScriptDataType|script.ScriptTypeAnnotation]:
         if not self._resolved_second:
             for i, t in enumerate(self.second_types):
                 if isinstance(t, str):
@@ -720,8 +734,8 @@ class PairOf(script.ScriptTypeAnnotation):
         return (fdts and isinstance(p.first, fdts) or any(a.compare(p.first) for a in fann)) and (sdts and isinstance(p.second, sdts) or any(a.compare(p.second) for a in sann))
 
     def format_data(self):
-        firststr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_first())
-        secondstr = "|".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_second())
+        firststr = "|".join(script.format_script_type_annotation(t) for t in self._resolve_first())
+        secondstr = "|".join(script.format_script_type_annotation(t) for t in self._resolve_second())
         return f"{firststr}, {secondstr}"
 
 class IteratorOf(script.ScriptTypeAnnotation):
@@ -790,7 +804,7 @@ class IteratorOf(script.ScriptTypeAnnotation):
         return True
     
     def format_data(self):
-        return " | ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+        return " | ".join(script.format_script_type_annotation(t) for t in self._resolve_types())
     
 
 class NotType(script.ScriptTypeAnnotation):
@@ -842,7 +856,7 @@ class NotType(script.ScriptTypeAnnotation):
         return True
 
     def format_data(self):
-        return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+        return ", ".join(script.format_script_type_annotation(t) for t in self._resolve_types())
 
 class AllTypes(script.ScriptTypeAnnotation):
 
@@ -893,7 +907,7 @@ class AllTypes(script.ScriptTypeAnnotation):
         return True
 
     def format_data(self):
-        return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+        return ", ".join(script.format_script_type_annotation(t) for t in self._resolve_types())
 
 class AnyTypes(script.ScriptTypeAnnotation):
 
@@ -931,7 +945,7 @@ class AnyTypes(script.ScriptTypeAnnotation):
             return False
 
     def compare(self, other):
-        if isinstance(other, ScriptValue):
+        if isinstance(other, script.ScriptValue):
             x = other.inner
         else:
             x = other
@@ -944,9 +958,51 @@ class AnyTypes(script.ScriptTypeAnnotation):
         return False
 
     def format_data(self):
-        return ", ".join(t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self._resolve_types())
+        return ", ".join(script.format_script_type_annotation(t) for t in self._resolve_types())
 
+class WholeNumber(script.ScriptTypeAnnotation):
 
+    ANNOTATION_NAME = "whole_number"
+
+    __slots__ = ()
+    _instance = None
+
+    @classmethod
+    def parse(cls, data):
+        if data:
+            raise exceptions.AnnotationBadArgumentsException(f"{cls.ANNOTATION_NAME} takes no arguments")
+        return cls()
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        pass
+
+    def __eq__(self, other):
+        if isinstance(other, WholeNumber):
+            return True
+        elif isinstance(other, script.ScriptDataType):
+            return other.issubtype(Integer, Float)
+        else:
+            return False
+
+    def compare(self, other):
+        if isinstance(other, script.ScriptValue):
+            x = other.inner
+        else:
+            x = other
+        if isinstance(x, int):
+            return True
+        elif isinstance(x, float):
+            return x.is_integer()
+        else:
+            return False
+
+    def format_data(self):
+        return ""
 
 _ListReadonlyTypeAttrs = utils.ScriptAttributeHandler[_rolist_wrapper,int](_ListTypeAttrs, wildcard=utils.ScriptValueAttribute(""))
 @_ListReadonlyTypeAttrs.enforce_child_attrs()
@@ -965,22 +1021,11 @@ class _MapReadonlyType(_MapType):
     attrs.wildcard.itemnoset(utils._DEFAULT_ITEM_READONLY_NO_ACCESS).itemnodel(utils._DEFAULT_ITEM_READONLY_NO_ACCESS)
 
 
-class _iterator[T](int):
+class _iterator[T](numunits._functional_integer):
 
     @classmethod
     def from_bytes(cls, bytes, byteorder="big", *, signed=False):
         return cls(super().from_bytes(bytes, byteorder, signed=signed))
-
-    def __new__(cls, value:int=0, *args, **kwargs):
-        if value is NotImplemented:
-            raise NotImplementedError
-        return super().__new__(cls, value)
-
-    def _copy(self, value:int):
-        cls = type(self)
-        new = cls.__new__(cls, value)
-        new.__dict__.update(self.__dict__)
-        return new
 
     async def next(self)->Self|None:
         return NotImplemented
@@ -993,138 +1038,6 @@ class _iterator[T](int):
 
     def python_iterate(self)->Iterable[T]:
         raise NotImplementedError
-
-    def __index__(self):
-        return int(self)
-
-    def __float__(self):
-        return float(self)
-
-    def __str__(self):
-        return "%d" % int(self)
-
-    def __repr__(self):
-        return f"<{type(self).__name__} {int(self)} at {hex(id(self)).upper()}>"
-
-    def __bool__(self):
-        return bool(self)
-
-    def __hash__(self):
-        return hash(int(self))
-
-    def __trunc__(self):
-        return self._copy(super(_iterator, self).__trunc__())
-
-    def __round__(self, ndigits = ...):
-        return self._copy(super(_iterator, self).__round__(ndigits))
-
-    def __abs__(self):
-        return self._copy(super(_iterator, self).__abs__())
-
-    def __neg__(self):
-        return self._copy(super(_iterator, self).__neg__())
-
-    def __pos__(self):
-        return self._copy(super(_iterator, self).__pos__())
-
-    def __add__(self, value):
-        return self._copy(super(_iterator, self).__add__(value))
-
-    def __sub__(self, value):
-        return self._copy(super(_iterator, self).__sub__(value))
-
-    def __mul__(self, value):
-        return self._copy(super(_iterator, self).__mul__(value))
-
-    def __truediv__(self, value):
-        return self._copy(super(_iterator, self).__truediv__(value))
-
-    def __floordiv__(self, value):
-        return self._copy(super(_iterator, self).__floordiv__(value))
-
-    def __pow__(self, value):
-        return self._copy(super(_iterator, self).__pow__(value))
-
-    def __mod__(self, value):
-        return self._copy(super(_iterator, self).__mod__(value))
-
-    def __radd__(self, value):
-        return self._copy(super(_iterator, self).__radd__(value))
-
-    def __rsub__(self, value):
-        return self._copy(super(_iterator, self).__rsub__(value))
-
-    def __rmul__(self, value):
-        return self._copy(super(_iterator, self).__rmul__(value))
-
-    def __rtruediv__(self, value):
-        return self._copy(super(_iterator, self).__rtruediv__(value))
-
-    def __rfloordiv__(self, value):
-        return self._copy(super(_iterator, self).__rfloordiv__(value))
-
-    def __eq__(self, value):
-        if isinstance(value, _iterator):
-            return int(self) == int(value)
-        return int(self) == value
-    
-    def __ne__(self, value):
-        if isinstance(value, _iterator):
-            return int(self) != int(value)
-        return int(self) != value
-    
-    def __gt__(self, value):
-        if isinstance(value, _iterator):
-            return int(self) > int(value)
-        return int(self) > value
-
-    def __ge__(self, value):
-        if isinstance(value, _iterator):
-            return int(self) >= int(value)
-        return int(self) >= value
-    
-    def __lt__(self, value):
-        if isinstance(value, _iterator):
-            return int(self) < int(value)
-        return int(self) < value
-
-    def __le__(self, value):
-        if isinstance(value, _iterator):
-            return int(self) <= int(value)
-        return int(self) <= value
-
-    def __invert__(self):
-        return self._copy(super(_iterator, self).__invert__())
-
-    def __and__(self, value):
-        return self._copy(super(_iterator, self).__and__(value))
-
-    def __or__(self, value):
-        return self._copy(super(_iterator, self).__or__(value))
-
-    def __xor__(self, value):
-        return self._copy(super(_iterator, self).__xor__(value))
-
-    def __rand__(self, value):
-        return self._copy(super(_iterator, self).__rand__(value))
-
-    def __ror__(self, value):
-        return self._copy(super(_iterator, self).__ror__(value))
-
-    def __rxor__(self, value):
-        return self._copy(super(_iterator, self).__rxor__(value))
-
-    def __lshift__(self, value):
-        return self._copy(super(_iterator, self).__lshift__(value))
-
-    def __rshift__(self, value):
-        return self._copy(super(_iterator, self).__rshift__(value))
-
-    def __rlshift__(self, value):
-        return self._copy(super(_iterator, self).__rlshift__(value))
-
-    def __rrshift__(self, value):
-        return self._copy(super(_iterator, self).__rrshift__(value))
 
 class _range_iterator[T](_iterator[T]):
     def __init__(self, value:int, start:int, stop:int, step:int):
@@ -1142,7 +1055,7 @@ class _range_iterator[T](_iterator[T]):
         yield from range(self.start, self.stop, self.step)
 
     async def next(self):
-        n = self + self.step
+        n:_range_iterator = self + self.step
         if n.in_range(n):
             return n
         else:
@@ -1151,8 +1064,8 @@ class _range_iterator[T](_iterator[T]):
     async def get(self):
         return int(self)
 
-    async def reset(self):
-        return self._copy(self.start-self.step)
+    async def reset(self)->Self:
+        return self._copy(int(self.start-self.step))
 
 class _iterable_iterator[T](_iterator[T]):
     def __init__(self, value:int, iterable:Iterable[T], callback:Callable[[Self, Self, Any], Any]|None=None):
@@ -1162,7 +1075,7 @@ class _iterable_iterator[T](_iterator[T]):
         self.callback = callback
 
     async def next(self):
-        n = self + 1
+        n:_iterable_iterator = self + 1
         if n._last > self:
             raise TypeError("cannot reverse iterate with this iterator")
         try:
@@ -1367,6 +1280,631 @@ class _UUIDType(ScriptDataType[uuid.UUID]):
     
     def deserialize(self, x):
         return uuid.UUID(x)
+
+
+class _color:
+    def to_rgba(self)->tuple[int,int,int,int]:
+        raise NotImplementedError
+
+    def to_hsla(self)->tuple[float,float,float,int]:
+        raise NotImplementedError
+    
+    def to_hsva(self)->tuple[float,float,float,int]:
+        raise NotImplementedError
+
+    def to_cmyka(self)->tuple[int,int,int,int]:
+        raise NotImplementedError
+
+    def _to_this(self)->tuple:
+        raise NotImplementedError
+
+    def _to_that(self, t:"type[_color]"):
+        if issubclass(t, _color_hsla):
+            return self.to_hsla()
+        elif issubclass(t, _color_hsva):
+            return self.to_hsva()
+        elif issubclass(t, _color_cmyka):
+            return self.to_cmyka()
+        else:
+            return self.to_rgba()
+
+
+    def __getitem__(self, key):
+        if not isinstance(key, int):
+            raise TypeError(f"must use int to subscript color for component item, got {type(key).__name__}")
+        return self._to_this()[key]
+
+    def __iter__(self):
+        return iter(self._to_this())
+
+    def __add__(self, other):
+        return type(self)(*(x+other for x in self._to_this()))
+    def __sub__(self, other):
+        return type(self)(*(x-other for x in self._to_this()))
+    def __mul__(self, other):
+        return type(self)(*(x*other for x in self._to_this()))
+    def __truediv__(self, other):
+        return type(self)(*(x/other for x in self._to_this()))
+    def __floordiv__(self, other):
+        return type(self)(*(x//other for x in self._to_this()))
+    def __mod__(self, other):
+        return type(self)(*(x%other for x in self._to_this()))
+    def __hash__(self):
+        return hash(self._to_this())
+    def __round__(self, ndigits=None):
+        return type(self)(*(round(x,ndigits=ndigits) for x in self._to_this()))
+    def __radd__(self, other):
+        return type(self)(*(other+x for x in self._to_this()))
+    def __rsub__(self, other):
+        return type(self)(*(other-x for x in self._to_this()))
+    def __rmul__(self, other):
+        return type(self)(*(other*x for x in self._to_this()))
+    def __rtruediv__(self, other):
+        return type(self)(*(0 if x == 0 else other/x for x in self._to_this()))
+    def __rfloordiv__(self, other):
+        return type(self)(*(0 if x == 0 else other//x for x in self._to_this()))
+    def __rmod__(self, other):
+        return type(self)(*(0 if x == 0 else other%x for x in self._to_this()))
+    def __eq__(self, value):
+        if isinstance(value, _color):
+            return self._to_this() == value._to_that(type(self))
+        else:
+            return all(a==value for a in self._to_this())
+    def __ne__(self, value):
+        if isinstance(value, _color):
+            return self._to_this() != value._to_that(type(self))
+        else:
+            return all(a!=value for a in self._to_this())
+    def __lt__(self, value):
+        if isinstance(value, _color):
+            return all(a<b for a,b in zip(self._to_this(), value._to_that(type(self))))
+        else:
+            return all(a<value for a in self._to_this())
+    def __le__(self, value):
+        if isinstance(value, _color):
+            return all(a<=b for a,b in zip(self._to_this(), value._to_that(type(self))))
+        else:
+            return all(a<=value for a in self._to_this())
+    def __gt__(self, value):
+        if isinstance(value, _color):
+            return all(a>b for a,b in zip(self._to_this(), value._to_that(type(self))))
+        else:
+            return all(a>value for a in self._to_this())
+    def __ge__(self, value):
+        if isinstance(value, _color):
+            return all(a>=b for a,b in zip(self._to_this(), value._to_that(type(self))))
+        else:
+            return all(a>=value for a in self._to_this())
+    
+
+class _color_name(_color):
+
+    #CITE: https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/named-color
+    NAME_MAP:dict[str, tuple[int,int,int,int]] = dict(
+        black=(0, 0, 0, 255),
+        silver=(192, 192, 192, 255),
+        gray=(128, 128, 128, 255),
+        grey=(128, 128, 128, 255),
+        white=(255, 255, 255, 255),
+        maroon=(128, 0, 0, 255),
+        red=(255, 0, 0, 255),
+        purple=(128, 0, 128, 255),
+        fuchsia=(255, 0, 255, 255),
+        magenta=(255, 0, 255, 255),
+        green=(0, 128, 0, 255),
+        lime=(0, 255, 0, 255),
+        olive=(128, 128, 0, 255),
+        yellow=(255, 255, 0, 255),
+        navy=(0, 0, 128, 255),
+        blue=(0, 0, 255, 255),
+        teal=(128, 0, 128, 255),
+        aqua=(255, 0, 255, 255),
+        cyan=(0, 255, 255, 255),
+        pink=(255, 192, 203, 255),
+        aliceblue=(240, 248, 255, 255),
+        antiquewhite=(250, 235, 215, 255),
+        aquamarine=(127, 255, 212, 255),
+        azure=(240, 255, 255, 255),
+        beige=(245, 245, 220, 255),
+        transparent= (0, 0, 0, 0),
+        bisque=(255, 228, 196, 255),
+        blanchedalmond=(255, 235, 205, 255),
+        blueviolet=(138, 43, 226, 255),
+        brown=(165, 42, 42, 255),
+        burlywood=(222, 184, 135, 255),
+        cadetblue=(95, 158, 160, 255),
+        chartreuse=(127, 255, 0, 255),
+        chocolate=(210, 105, 30, 255),
+        coral=(255, 127, 80, 255),
+        cornflowerblue=(100, 149, 237, 255),
+        cornsilk=(255, 248, 220, 255),
+        crimson=(220, 20, 60, 255),
+        darkblue=(0, 0, 139, 255),
+        darkcyan=(0, 139, 139, 255),
+        darkgoldenrod=(184, 134, 11, 255),
+        darkgray=(169, 169, 169, 255),
+        darkgreen=(0, 100, 0, 255),
+        darkgrey=(169, 169, 169, 255),
+        darkkhaki=(189, 183, 107, 255),
+        darkmagenta=(139, 0, 139, 255),
+        darkolivegreen=(85, 107, 47, 255),
+        darkorange=(255, 140, 0, 255),
+        darkorchid=(153, 50, 204, 255),
+        darkred=(139, 0, 0, 255),
+        darksalmon=(233, 150, 122, 255),
+        darkseagreen=(143, 188, 143, 255),
+        darkslateblue=(72, 61, 139, 255),
+        darkslategray=(47, 79, 79, 255),
+        darkslategrey=(47, 79, 79, 255),
+        darkturquoise=(0, 206, 209, 255),
+        darkviolet=(148, 0, 211, 255),
+        deeppink=(255, 20, 147, 255),
+        deepskyblue=(0, 191, 255, 255),
+        dimgray=(105, 105, 105, 255),
+        dimgrey=(105, 105, 105, 255),
+        dodgerblue=(30, 144, 255, 255),
+        firebrick=(178, 34, 34, 255),
+        floralwhite=(255, 250, 240, 255),
+        forestgreen=(34, 139, 34, 255),
+        gainsboro=(220, 220, 220, 255),
+        ghostwhite=(248, 248, 255, 255),
+        gold=(255, 215, 0, 255),
+        goldenrod=(218, 165, 32, 255),
+        greenyellow=(173, 255, 47, 255),
+        honeydew=(240, 255, 240, 255),
+        hotpink=(255, 105, 180, 255),
+        indianred=(205, 92, 92, 255),
+        indigo=(75, 0, 130, 255),
+        ivory=(255, 255, 240, 255),
+        khaki=(240, 230, 140, 255),
+        lavender=(230, 230, 250, 255),
+        lavenderblush=(255, 240, 245, 255),
+        lawngreen=(124, 252, 0, 255),
+        lemonchiffon=(255, 250, 205, 255),
+        lightblue=(173, 216, 230, 255),
+        lightcoral=(240, 128, 128, 255),
+        lightcyan=(224, 255, 255, 255),
+        lightgoldenrodyellow=(250, 250, 210, 255),
+        lightgray=(211, 211, 211, 255),
+        lightgreen=(144, 238, 144, 255),
+        lightgrey=(211, 211, 211, 255),
+        lightpink=(255, 182, 193, 255),
+        lightsalmon=(255, 160, 122, 255),
+        lightseagreen=(32, 178, 170, 255),
+        lightskyblue=(135, 206, 250, 255),
+        lightslategray=(119, 136, 153, 255),
+        lightslategrey=(119, 136, 153, 255),
+        lightsteelblue=(176, 196, 222, 255),
+        lightyellow=(255, 255, 224, 255),
+        limegreen=(50, 205, 50, 255),
+        linen=(250, 240, 230, 255),
+        mediumaquamarine=(102, 205, 170, 255),
+        mediumblue=(0, 0, 205, 255),
+        mediumorchid=(186, 85, 211, 255),
+        mediumpurple=(147, 112, 219, 255),
+        mediumseagreen=(60, 179, 113, 255),
+        mediumslateblue=(123, 104, 238, 255),
+        mediumspringgreen=(0, 250, 154, 255),
+        mediumturquoise=(72, 209, 204, 255),
+        mediumvioletred=(199, 21, 133, 255),
+        midnightblue=(25, 25, 112, 255),
+        mintcream=(245, 255, 250, 255),
+        mistyrose=(255, 228, 225, 255),
+        moccasin=(255, 228, 181, 255),
+        navajowhite=(255, 222, 173, 255),
+        oldlace=(253, 245, 230, 255),
+        olivedrab=(107, 142, 35, 255),
+        orange=(255, 165, 0, 255),
+        orangered=(255, 69, 0, 255),
+        orchid=(218, 112, 214, 255),
+        palegoldenrod=(238, 232, 170, 255),
+        palegreen=(152, 251, 152, 255),
+        paleturquoise=(175, 238, 238, 255),
+        palevioletred=(219, 112, 147, 255),
+        papayawhip=(255, 239, 213, 255),
+        peachpuff=(255, 218, 185, 255),
+        peru=(205, 133, 63, 255),
+        plum=(221, 160, 221, 255),
+        powderblue=(176, 224, 230, 255),
+        rebeccapurple=(102, 51, 153, 255),
+        rosybrown=(188, 143, 143, 255),
+        royalblue=(65, 105, 225, 255),
+        saddlebrown=(139, 69, 19, 255),
+        salmon=(250, 128, 114, 255),
+        sandybrown=(244, 164, 96, 255),
+        seagreen=(46, 139, 87, 255),
+        seashell=(255, 245, 238, 255),
+        sienna=(160, 82, 45, 255),
+        skyblue=(135, 206, 235, 255),
+        slateblue=(106, 90, 205, 255),
+        slategray=(112, 128, 144, 255),
+        slategrey=(112, 128, 144, 255),
+        snow=(255, 250, 250, 255),
+        springgreen=(0, 255, 127, 255),
+        steelblue=(70, 130, 180, 255),
+        tan=(210, 180, 140, 255),
+        thistle=(216, 191, 216, 255),
+        tomato=(255, 99, 71, 255),
+        turquoise=(64, 224, 208, 255),
+        violet=(238, 130, 238, 255),
+        wheat=(245, 222, 179, 255),
+        whitesmoke=(245, 245, 245, 255),
+        yellowgreen=(154, 205, 50, 255),
+    )
+
+    @classmethod
+    def get(cls, name:str, a:int=numunits.color_component_rgba.UPPER):
+        if name in cls.NAME_MAP:
+            return cls(name, a=a)
+
+    def __init__(self, name:str, a:int=numunits.color_component_rgba.UPPER):
+        self.name = name
+        self.a = a
+
+    def __str__(self):
+        return self.name
+
+    def to_rgba(self):
+        r,g,b,a = self.NAME_MAP[self.name.lower()]
+        return r, g, b, int(self.a)*a//255
+
+    def to_hsla(self):
+        return _color_rgba._hsla(*self.to_rgba())
+    
+    def to_hsva(self):
+        return _color_rgba._hsva(*self.to_rgba())
+    
+    def to_cmyka(self):
+        return _color_rgba._cmyka(*self.to_rgba())
+
+    _to_this = to_rgba
+        
+
+class _color_rgba(_color):
+    def __init__(self, r:int, g:int, b:int, a:int=numunits.color_component_rgba.UPPER):
+        self.r = numunits.color_component_rgba(r)
+        self.g = numunits.color_component_rgba(g)
+        self.b = numunits.color_component_rgba(b)
+        self.a = numunits.color_component_rgba(a)
+
+    def to_rgba(self):
+        return self.r, self.g, self.b, self.a
+
+    @staticmethod
+    def _hsla(r, g, b, a:numunits.color_component_rgba):
+        r = int(r)/255
+        g = int(g)/255
+        b = int(b)/255
+        xmax = max(r,g,b)
+        xmin = min(r,g,b)
+        d = xmax-xmin
+        l = (xmax + xmin) / 2
+        if abs(d) < 1E-14:
+            s = 0.0
+        elif l <= 0.5:
+            s = d / (xmax + xmin)
+        else:
+            s = d / (2 - xmax - xmin)
+        if d == 0:
+            h = 0.0
+        elif xmax == r:
+            h = 60.0 * ((g - b)/d % 6)
+        elif xmax == g:
+            h = 60.0 * ((b - r)/d + 2)
+        else: #xmax == b
+            h = 60.0 * ((r - g)/d + 4)
+        return h,s,l,a
+    
+    @staticmethod
+    def _hsva(r, g, b, a:numunits.color_component_rgba):
+        r = int(r)/255
+        g = int(g)/255
+        b = int(b)/255
+        xmax = max(r,g,b)
+        xmin = min(r,g,b)
+        d = xmax-xmin
+        v = xmax
+        if xmax < 1E-14:
+            s = 0.0
+        else:
+            s = d / xmax
+        if d == 0:
+            h = 0.0
+        elif xmax == r:
+            h = 60.0 * ((g - b)/d % 6)
+        elif xmax == g:
+            h = 60.0 * ((b - r)/d + 2)
+        else: #xmax == b
+            h = 60.0 * ((r - g)/d + 4)
+        return h, s, v, a
+        
+    def _cmyka(r, g, b, a:numunits.color_component_rgba):
+        r = int(r)/255
+        g = int(g)/255
+        b = int(b)/255
+        k = 1-max(r,g,b)
+        kcomp = 1-k
+        if kcomp:
+            c = (1 - r - k)/kcomp
+            m = (1 - g - k)/kcomp
+            y = (1 - b - k)/kcomp
+        else:
+            c = m = y = 0
+        return (
+            numunits.color_component_cmyk(min(c*100, 100)),
+            numunits.color_component_cmyk(min(m*100, 100)),
+            numunits.color_component_cmyk(min(y*100, 100)),
+            numunits.color_component_cmyk(min(k*100, 100)),
+            a
+        )
+    
+    def to_hsla(self):
+        return self._hsla(self.r, self.g, self.b, self.a)
+
+    def to_hsva(self):
+        return self._hsva(self.r, self.g, self.b, self.a)
+
+    def to_cmyka(self):
+        return self._cmyka(self.r, self.g, self.b, self.a)
+
+    _to_this = to_rgba
+
+
+class _color_hsla(_color):
+    def __init__(self, h:numunits.degrees, s:numunits.percent, l:numunits.percent, a:int=numunits.color_component_rgba.UPPER):
+        self.h = numunits.degrees(float(h))
+        self.s = numunits.percent(float(s))
+        self.l = numunits.percent(float(l))
+        self.a = numunits.color_component_rgba(a)
+
+    def to_rgba(self):
+        hv = self.h.value
+        C = (1 - abs(2 * self.l.value - 1)) * self.s.value
+        X = C * (1 - abs((hv/60) % 2 - 1))
+        m = self.l.value - C / 2
+        if hv >= 0 and hv < 60:
+            r = C
+            g = X
+            b = 0
+        elif hv >= 60 and hv < 120:
+            r = X
+            g = C
+            b = 0
+        elif hv >= 120 and hv < 180:
+            r = 0
+            g = C
+            b = X
+        elif hv >= 180 and hv < 240:
+            r = 0
+            g = X
+            b = C
+        elif hv >= 240 and hv < 300:
+            r = X
+            g = 0
+            b = C
+        elif hv >= 300 and hv < 360:
+            r = C
+            g = 0
+            b = X
+
+        return (
+            numunits.color_component_rgba(min(int((r+m)*255), 255)),
+            numunits.color_component_rgba(min(int((g+m)*255), 255)),
+            numunits.color_component_rgba(min(int((b+m)*255), 255)),
+            self.a
+        )
+
+    def to_hsla(self):
+        return (self.h.value, self.s.value, self.l.value, self.a)
+
+    def to_hsva(self):
+        lv = self.l.value
+        sv = self.s.value
+        v = lv + sv * min(lv, 1-lv)
+        s = 0.0 if abs(v) < 1E-14 else 2 * (1 - lv/v)
+        return (self.h.value, s, v, self.a)
+
+    def to_cmyka(self):
+        return _color_rgba._cmyka(*self.to_rgba)
+
+    _to_this = to_hsla
+
+class _color_hsva(_color):
+    def __init__(self, h:numunits.degrees, s:numunits.percent, v:numunits.percent, a:int=numunits.color_component_rgba.UPPER):
+        self.h = numunits.degrees(float(h))
+        self.s = numunits.percent(float(s))
+        self.v = numunits.percent(float(v))
+        self.a = numunits.color_component_rgba(a)
+
+    def to_rgba(self):
+        hv = self.h.value
+        C = self.v * self.s
+        X = C * (1 - abs((hv/60) % 2 - 1))
+        m = self.v.value - C
+        if hv >= 0 and hv < 60:
+            r = C
+            g = X
+            b = 0
+        elif hv >= 60 and hv < 120:
+            r = X
+            g = C
+            b = 0
+        elif hv >= 120 and hv < 180:
+            r = 0
+            g = C
+            b = X
+        elif hv >= 180 and hv < 240:
+            r = 0
+            g = X
+            b = C
+        elif hv >= 240 and hv < 300:
+            r = X
+            g = 0
+            b = C
+        elif hv >= 300 and hv < 360:
+            r = C
+            g = 0
+            b = X
+
+        return (
+            numunits.color_component_rgba(min(int((r+m)*255), 255)),
+            numunits.color_component_rgba(min(int((g+m)*255), 255)),
+            numunits.color_component_rgba(min(int((b+m)*255), 255)),
+            self.a
+        )
+
+    def to_hsla(self):
+        vv = self.v.value
+        sv = self.s.value
+        l = vv * (1 - sv/2)
+        s = 0.0 if abs(l) < 1E-14 or abs(l-1) < 1E-14 else (vv - l)/min(l, 1-l)
+        return (self.h.value, s, l, self.a)
+
+    def to_hsva(self):
+        return self.h.value, self.s.value, self.v.value, self.a
+
+    def to_cmyka(self):
+        return _color_rgba._cmyka(*self.to_rgba())
+
+    _to_this = to_hsva
+
+
+class _color_cmyka(_color):
+    def __init__(self, c:int, m:int, y:int, k:int, a:int=numunits.color_component_rgba.UPPER):
+        self.c = numunits.color_component_cmyk(c)
+        self.m = numunits.color_component_cmyk(m)
+        self.y = numunits.color_component_cmyk(y)
+        self.k = numunits.color_component_cmyk(k)
+        self.a = numunits.color_component_rgba(a)
+
+    def to_rgba(self):
+        kcomp = 1 - int(self.k)
+        return (
+            numunits.color_component_rgba(min(int((1 - int(self.c)/100)*kcomp*255), 255)),
+            numunits.color_component_rgba(min(int((1 - int(self.m)/100)*kcomp*255), 255)),
+            numunits.color_component_rgba(min(int((1 - int(self.y)/100)*kcomp*255), 255)),
+            self.a
+        )
+
+    def to_hsla(self):
+        return _color_rgba._hsla(*self.to_rgba())
+    
+    def to_hsva(self):
+        return _color_rgba._hsva(*self.to_rgba())
+
+    def to_cmyka(self):
+        return self.c, self.m, self.y, self.y, self.a
+
+    _to_this = to_cmyka
+
+
+class _ColorComponentType(ScriptDataType[numunits.color_component]):
+    def repr(self, value):
+        return script.ScriptValue(String, f"<{value.type.name} {int(value.inner)}>")
+
+
+def _typeattr_named_color(cname:str):
+    c = _color_name(cname)
+    def f(o:script.ScriptValue[type[_color]], n:str):
+        if o.inner in (_color, _color_name):
+            return script.wrap_python_value(c)
+        return script.wrap_python_value(o.inner(*c._to_that(o.inner)))
+    return f
+
+_ColorBaseTypeAttrs = utils.ScriptAttributeHandler[_color,Any](no_type_subscripting=True)
+@_ColorBaseTypeAttrs.enforce_child_attrs()
+@_ColorBaseTypeAttrs.attach
+class _ColorBaseType(ScriptDataType[_color]):
+
+    f_construct = construct = utils.ScriptFunction()
+    
+    attrs = _ColorBaseTypeAttrs
+    for cname in _color_name.NAME_MAP.keys():
+        attrs.type_entry(cname).readonly(_typeattr_named_color(cname))
+    del cname #make sure this isn't kept as a class attribute
+    attrs.entry("length").readonly(lambda o,n: script.wrap_python_value(len(o.inner._to_this())))
+
+
+_ColorNameTypeAttrs = utils.ScriptAttributeHandler[_color_name, Any](_ColorBaseTypeAttrs)
+@_ColorNameTypeAttrs.enforce_child_attrs()
+@_ColorNameTypeAttrs.attach
+class _ColorNameType(ScriptDataType[_color_name]):
+
+    f_construct = construct = utils.ScriptFunction()
+
+    attrs = _ColorNameTypeAttrs
+
+    def repr(self, value):
+        return script.ScriptValue(String, f"{self.name}({value.inner.name})")
+
+    def conv_str(self, value):
+        return script.ScriptValue(String, value.inner.name)
+
+_ColorRGBTypeAttrs = utils.ScriptAttributeHandler[_color_rgba, Any](_ColorBaseTypeAttrs)
+@_ColorRGBTypeAttrs.enforce_child_attrs()
+@_ColorRGBTypeAttrs.attach
+class _ColorRGBType(ScriptDataType[_color_rgba]):
+
+    f_construct = construct = utils.ScriptFunction()
+
+    attrs = _ColorRGBTypeAttrs
+    attrs.entry("r","red").readonly(utils.SimpleGetAttribute("r"))
+    attrs.entry("g","green").readonly(utils.SimpleGetAttribute("g"))
+    attrs.entry("b","blue").readonly(utils.SimpleGetAttribute("b"))
+    attrs.entry("a","alpha").readonly(utils.SimpleGetAttribute("a"))
+
+    def repr(self, value):
+        return script.ScriptValue(String, f"{self.name}({int(value.inner.r)}, {int(value.inner.g)}, {int(value.inner.b)}, alpha={int(value.inner.a)})")
+
+_ColorHSLTypeAttrs = utils.ScriptAttributeHandler[_color_hsla, Any](_ColorBaseTypeAttrs)
+@_ColorHSLTypeAttrs.enforce_child_attrs()
+@_ColorHSLTypeAttrs.attach
+class _ColorHSLType(ScriptDataType[_color_hsla]):
+
+    f_construct = construct = utils.ScriptFunction()
+
+    attrs = _ColorHSLTypeAttrs
+    attrs.entry("h","hue").readonly(utils.SimpleGetAttribute("h"))
+    attrs.entry("s","saturation").readonly(utils.SimpleGetAttribute("s"))
+    attrs.entry("l","lightness").readonly(utils.SimpleGetAttribute("l"))
+    attrs.entry("a","alpha").readonly(utils.SimpleGetAttribute("a"))
+
+    def repr(self, value):
+        return script.ScriptValue(String, f"{self.name}({round(value.inner.h.value, 12)}°, {round(float(value.inner.s)*100, 12)}%, {round(float(value.inner.l)*100, 12)}%, alpha={int(value.inner.a)})")
+
+_ColorHSVTypeAttrs = utils.ScriptAttributeHandler[_color_hsva, Any](_ColorBaseTypeAttrs)
+@_ColorHSVTypeAttrs.enforce_child_attrs()
+@_ColorHSVTypeAttrs.attach
+class _ColorHSVType(ScriptDataType[_color_hsva]):
+
+    f_construct = construct = utils.ScriptFunction()
+
+    attrs = _ColorHSVTypeAttrs
+    attrs.entry("h","hue").readonly(utils.SimpleGetAttribute("h"))
+    attrs.entry("s","saturation").readonly(utils.SimpleGetAttribute("s"))
+    attrs.entry("v","value").readonly(utils.SimpleGetAttribute("v"))
+    attrs.entry("a","alpha").readonly(utils.SimpleGetAttribute("a"))
+
+    def repr(self, value):
+        return script.ScriptValue(String, f"{self.name}({round(value.inner.h.value, 12)}°, {round(float(value.inner.s)*100, 12)}%, {round(float(value.inner.v)*100, 12)}%, alpha={int(value.inner.a)})")
+
+_ColorCMYKTypeAttrs = utils.ScriptAttributeHandler[_color_cmyka, Any](_ColorBaseTypeAttrs)
+@_ColorCMYKTypeAttrs.enforce_child_attrs()
+@_ColorCMYKTypeAttrs.attach
+class _ColorCMYKType(ScriptDataType[_color_cmyka]):
+
+    f_construct = construct = utils.ScriptFunction()
+
+    attrs = _ColorCMYKTypeAttrs
+    attrs.entry("c","cyan").readonly(utils.SimpleGetAttribute("c"))
+    attrs.entry("m","magenta").readonly(utils.SimpleGetAttribute("m"))
+    attrs.entry("y","yellow").readonly(utils.SimpleGetAttribute("y"))
+    attrs.entry("k","key","b","black").readonly(utils.SimpleGetAttribute("k"))
+    attrs.entry("a","alpha").readonly(utils.SimpleGetAttribute("a"))
+
+    def repr(self, value):
+        return script.ScriptValue(String, f"{self.name}({int(value.inner.c)}, {int(value.inner.m)}, {int(value.inner.y)}, {int(value.inner.k)}, alpha={int(value.inner.a)})")
+
     
 class _JsonProxyRootType(ScriptDataType[json_proxy.JsonProxyRoot]):
     
@@ -1722,6 +2260,15 @@ Percent = _PercentType("percent", numunits.percent, BASE_TYPE)
 Degrees = _DegreesType("degrees", numunits.degrees, BASE_TYPE)
 Radians = _RadiansType("radians", numunits.radians, BASE_TYPE)
 FunctionParameter = _FunctionParameterType("FunctionParameter", utils.ScriptFunctionParam, BASE_TYPE)
+ColorComponent = _ColorComponentType("color_component", numunits.color_component, Integer)
+ColorComponentRGBA = _ColorComponentType("rgba_color_component", numunits.color_component_rgba, ColorComponent)
+ColorComponentCMYK = _ColorComponentType("cmyk_color_component", numunits.color_component_cmyk, ColorComponent)
+Color = _ColorBaseType("color", _color, BASE_TYPE)
+NamedColor = _ColorNameType("named_color", _color_name, Color)
+ColorRGB = _ColorRGBType("color_rgb", _color_rgba, Color)
+ColorHSL = _ColorHSLType("color_hsl", _color_hsla, Color)
+ColorHSV = _ColorHSVType("color_hsv", _color_hsva, Color)
+ColorCMYK = _ColorCMYKType("color_cmyk", _color_cmyka, Color)
 
 _StringTypeAttrs.wildcard.itemgetter(BASE_TYPE.getitem).itemsetter(BASE_TYPE.setitem).itemdeleter(BASE_TYPE.delitem)
 _ListTypeAttrs.wildcard.itemgetter(List.getitem).itemsetter(List.setitem).itemdeleter(List.delitem)
@@ -1736,7 +2283,8 @@ PI = script.ScriptValue(Float, math.pi)
 _builtin_types:list[ScriptDataType] = [
     Type, TypeAnnotation, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID, Datetime,
     File, Nanoseconds, Microseconds, Milliseconds, Seconds, Minutes, Hours, Weeks,
-    Days, Percent, Degrees, Radians, FunctionParameter
+    Days, Percent, Degrees, Radians, FunctionParameter, Color, ColorRGB, ColorHSL, ColorHSV,
+    ColorCMYK, NamedColor
 ]
 
 @_TypeType.f_construct.overload(("value", [AnyType, NamePair]))
@@ -1890,6 +2438,12 @@ def percent_construct_degrees(self:ScriptDataType[numunits.percent], value:Scrip
 def percent_construct_degrees(self:ScriptDataType[numunits.percent], value:ScriptVariable[numunits.radians]):
     return script.ScriptValue(self, numunits.percent(value.get().inner.value / math.tau)) #tau == 2pi
 
+@_PercentType.f_construct.overload(("value", ColorComponent))
+def percent_construct_color_component(self:ScriptDataType[numunits.percent], value:ScriptVariable[numunits.color_component]):
+    v = value.get().inner
+    vrange = v.UPPER - v.LOWER
+    return script.wrap_python_value(self.inner((v-v.LOWER)/vrange))
+
 @_DegreesType.f_construct.overload(("value", [Integer, Float, String, Bool]))
 def degrees_construct(self:ScriptDataType[numunits.degrees], value:ScriptVariable[int|float|str]):
     return script.ScriptValue(Degrees, numunits.degrees(float(value.get().inner)))
@@ -1924,7 +2478,7 @@ def radians_construct_percent(self:ScriptDataType[numunits.radians], value:Scrip
 
 _FUNC_PARAM_NO_DEFAULT = object()
 @_FunctionParameterType.f_construct.overload(("name", String), ("data_types", [String, Type, TypeAnnotation, ListOf(String, Type, TypeAnnotation)], ScriptValue(Type, object)), ("default", AnyType, _FUNC_PARAM_NO_DEFAULT), ("pack", Bool, false))
-def FunctionParameter_construct(name:ScriptVariable[str], data_types:ScriptVariable[type|ScriptTypeAnnotation|str|list[type|ScriptTypeAnnotation|str]], default:ScriptVariable, pack:ScriptVariable[bool]):
+def FunctionParameter_construct(self:ScriptDataType[utils.ScriptFunctionParam], name:ScriptVariable[str], data_types:ScriptVariable[type|ScriptTypeAnnotation|str|list[type|ScriptTypeAnnotation|str]], default:ScriptVariable, pack:ScriptVariable[bool]):
     dtv = data_types.get()
     if dtv.type.issubtype(List):
         dts = [script.DATA_TYPE_TABLE[dt] if isinstance(dt, type) else dt for dt in dtv.inner]
@@ -1938,13 +2492,297 @@ def FunctionParameter_construct(name:ScriptVariable[str], data_types:ScriptVaria
         pack.get().inner
     ))
 
+
+_PATTERN_INT = r"[0-9]+"
+_PATTERN_FLOAT = r"[0-9]*\.[0-9]+"
+_PATTERN_COLOR_COMPONENT = f"(?:^\\s*|\\s*[\\/,]?\\s*)(?:(?P<float>{_PATTERN_FLOAT})|(?P<int>{_PATTERN_INT}))\\s*(?:(?P<percent>%)|(?P<degrees>deg|°))?\\s*"
+_RE_COLOR_COMPONENT = re.compile(_PATTERN_COLOR_COMPONENT)
+
+def _re_color_alpha(s:str, k:int):
+    m = _RE_COLOR_COMPONENT.match(s, k)
+    if m is None:
+        return
+    k += m.end()-k
+    f = m["float"]
+    i = m["int"]
+    p = m["percent"]
+    d = m["degrees"]
+    if d:
+        ... #TODO error alpha component cannot be given in degrees
+    if p:
+        if f is None:
+            iv = int(i)
+            if iv < 0  or iv > 100:
+                ... #TODO error component percentage not in range (must be between 0% and 100%, inclusive)
+            return numunits.color_component_rgba.from_percent(iv/100)
+        else:
+            #p = (v-lower)/(upper-lower)
+            #v = p*(upper-lower)+lower
+            fv = float(f)
+            if fv<1E-14 or (fv-100)>1E-14:
+                ... #TODO error component percentage not in range (must be between 0.0% and 100.0%, inclusive)
+            return numunits.color_component_rgba.from_percent(fv/100)
+    elif f is None:
+        iv = int(i)
+        if iv < numunits.color_component_rgba.LOWER or iv > numunits.color_component_rgba.UPPER:
+            ... #TODO error component value not in range (must be between lower and upper, inclusive)
+        return numunits.color_component_rgba(iv)
+    else:
+        fv = float(f)
+        if fv < 0 or fv > 1:
+            ... #TODO error component percentage not in range (must be between 0.0 and 1.0, inclusive)
+        return numunits.color_component_rgba.from_percent(fv)
+
+def _rgb_construct(s:str):
+    k = 0
+    parsed = []
+    for j in range(3):
+        m = _RE_COLOR_COMPONENT.match(s, k)
+        if m is None:
+            ... #TODO error missing color components
+            assert False, str(j)
+        k += m.end()-k
+
+        f = m["float"]
+        i = m["int"]
+        p = m["percent"]
+        d = m["degrees"]
+        if d:
+            ... #TODO error RGB components cannot be given in degrees
+        if p:
+            if f is None:
+                iv = int(i)
+                if iv < 0  or iv > 100:
+                    ... #TODO error component percentage not in range (must be between 0% and 100%, inclusive)
+                parsed.append(numunits.color_component_rgba.from_percent(iv/100))
+            else:
+                fv = float(f)
+                if fv<1E-14 or (fv-100)>1E-14:
+                    ... #TODO error component percentage not in range (must be between 0.0% and 100.0%, inclusive)
+                parsed.append(numunits.color_component_rgba.from_percent(fv/100))
+        elif f is None:
+            iv = int(i)
+            if iv < numunits.color_component_rgba.LOWER or iv > numunits.color_component_rgba.UPPER:
+                ... #TODO error component value not in range (must be between lower and upper, inclusive)
+            parsed.append(iv)
+        else:
+            fv = float(f)
+            if fv < 0 or iv > 1:
+                ... #TODO error component percentage not in range (must be between 0.0 and 1.0, inclusive)
+            parsed.append(numunits.color_component_rgba.from_percent(fv))
+
+    alpha = _re_color_alpha(s, k)
+    if alpha is not None:
+        parsed.append(alpha)
+    
+    return _color_rgba(*parsed)
+
+def _hue_sat_func(t:type[_color_hsla|_color_hsva]):
+    def _hue_sat_construct(s:str):
+        parsed = []
+        k = 0
+        m = _RE_COLOR_COMPONENT.match(s)
+        if m is None:
+            ... #TODO error hue value is needed
+        k += m.end()-k
+        f = m["float"]
+        i = m["int"]
+        p = m["percent"]
+        d = m["degrees"]
+
+        if p:
+            #mod 36000 allows for more accuracy to be kept when clamping to [0, 360) range
+            if f is None:
+                v = int(i) * 360 % 36000 / 100
+            else:
+                v = float(f) * 360 % 36000 / 100
+            parsed.append(numunits.degrees(v))
+        elif f is None:
+            parsed.append(numunits.degrees(int(i) % 360))
+        elif i is None:
+            ... #TODO error must specify value for hue component
+        else:
+            parsed.append(numunits.degrees(float(f) % 360))
+
+        for _ in range(2):
+            m = _RE_COLOR_COMPONENT.match(s, k)
+            if m is None:
+                ... #TODO error missing color components
+            k += m.end()-k
+    
+            f = m["float"]
+            i = m["int"]
+            p = m["percent"]
+            d = m["degrees"]
+
+            if d:
+                ... #TODO error component cannot be given in degrees
+            elif f is None:
+                parsed.append(numunits.percent(int(i)/100))
+            else:
+                parsed.append(numunits.percent(float(f)/100))
+
+        alpha = _re_color_alpha(s, k)
+        if alpha is not None:
+            parsed.append(alpha)
+        return t(*parsed)
+    return _hue_sat_construct
+
+
+def _cmyk_construct(s:str):
+    k = 0
+    parsed = []
+    for j in range(4):
+        m = _RE_COLOR_COMPONENT.match(s, k)
+        if m is None:
+            ... #TODO error missing color components
+        k += m.end()-k
+
+        f = m["float"]
+        i = m["int"]
+        p = m["percent"]
+        d = m["degrees"]
+        if d:
+            ... #TODO error CMKY components cannot be given in degrees
+        elif f is None:
+            iv = int(i)
+            if iv < numunits.color_component_cmyk.LOWER  or iv > numunits.color_component_cmyk.UPPER:
+                ... #TODO error component value not in range (must be between lower and upper, inclusive)
+            parsed.append(numunits.color_component_cmyk(iv))
+        else:
+            fv = float(f)
+            if fv<1E-14 or (fv-100)>1E-14:
+                ... #TODO error component percentage not in range (must be between 0.0% and 100.0%, inclusive)
+            parsed.append(numunits.color_component_cmyk(fv))
+
+    alpha = _re_color_alpha(s, k)
+    if alpha is not None:
+        parsed.append(alpha)
+    
+    return _color_cmyka(*parsed)
+
+            
+    
+
+_color_fmap = dict(
+    rgb=_rgb_construct,
+    hsl=_hue_sat_func(_color_hsla),
+    hsv=_hue_sat_func(_color_hsva),
+    cmyk=_cmyk_construct,
+    rgba=_rgb_construct,
+    hsla=_hue_sat_func(_color_hsla),
+    hsva=_hue_sat_func(_color_hsva),
+    cmyka=_cmyk_construct,
+)
+@_ColorBaseType.f_construct.overload(("formatted", String))
+def Color_construct(self:ScriptDataType[_color], formatted:ScriptVariable[str]):
+    fs = formatted.get().inner.strip().lower()
+    startp = fs.find("(")
+    if startp != -1:
+        endp = fs.rfind(")")
+        if endp == -1 or endp!=len(fs)-1:
+            ... #TODO error bad color string
+        name = fs[0:startp]
+        args = fs[startp+1:endp]
+        f = _color_fmap.get(name,None)
+        if f is None:
+            ... #TODO error bad color format name
+        if not args:
+            ... #TODO error missing color components
+        return script.wrap_python_value(f(args))
+    elif ")" in fs:
+        ... #TODO error bad color string
+    
+    if fs.startswith("#"):
+        fs = fs[1:]
+    else:
+        cname = _color_name.get("".join(c for c in fs if not c.isspace()))
+        if cname is not None:
+            return script.wrap_python_value(cname)
+    lfs = len(fs)
+    if lfs not in (3, 4, 6, 8):
+        ... #TODO error bad color string
+    if any(c not in "0123456789abcdef" for c in fs):
+        ... #TODO error bad color string
+    x = int(fs, 16)
+    if x:
+        if lfs <= 4:
+            return script.wrap_python_value(_color_rgba(*(int(c*2,16) for c in fs)))
+        else:
+            return script.wrap_python_value(_color_rgba(*(int(fs[i:i+2],16) for i in range(0, len(fs), 2))))
+    else:
+        return script.wrap_python_value(_color_rgba(0, 0, 0, 255 * (len(fs)%4)))
+
+@_ColorNameType.f_construct.overload(("name", String), ("alpha", WholeNumber(), numunits.color_component_rgba.UPPER))
+def ColorName_construct(self, name:ScriptVariable[str], alpha:ScriptVariable):
+    return script.wrap_python_value(_color_name(name.get().inner, alpha.get().inner))
+
+def _resolve_color_component[T:numunits.color_component](c:ScriptVariable, ctype:type[T]):
+    x = c.get()
+    if x.type.issubtype(Percent):
+        return ctype.from_percent(float(x.inner), clamp=False)
+    else:
+        return int(x.inner)
+
+@_ColorNameType.f_construct.overload(("red", [WholeNumber(), Percent]), ("green", [WholeNumber(), Percent]), ("blue", [WholeNumber(), Percent]), ("alpha", [WholeNumber(), Percent], numunits.color_component_rgba.UPPER))
+def ColorName_from_rgba(self, red:script.ScriptVariable, green:script.ScriptVariable, blue:script.ScriptVariable, alpha:script.ScriptVariable):
+    r = _resolve_color_component(red, numunits.color_component_rgba)
+    g = _resolve_color_component(green, numunits.color_component_rgba)
+    b = _resolve_color_component(blue, numunits.color_component_rgba)
+    a = _resolve_color_component(alpha, numunits.color_component_rgba)
+    if not (r or g or b or a):
+        return script.wrap_python_value(_color_name("transparent"))
+    for name, (nr, ng, nb, na) in _color_name.NAME_MAP.items():
+        if r == nr and g == ng and b == nb:
+            return script.wrap_python_value(_color_name(name, (numunits.color_component_rgba.UPPER*(a+0.5)//na) if na else numunits.color_component_rgba.UPPER)) #estimates the value which when blended with na will result in a
+    raise exceptions.TRBadValue("given color components do not correspond to a named color")
+
+@_ColorRGBType.f_construct.overload(("red", [WholeNumber(), Percent]), ("green", [WholeNumber(), Percent]), ("blue", [WholeNumber(), Percent]), ("alpha", [WholeNumber(), Percent], numunits.color_component_rgba.UPPER))
+def ColorRGB_construct(self, red:script.ScriptVariable, green:script.ScriptVariable, blue:script.ScriptVariable, alpha:script.ScriptVariable):
+    r = _resolve_color_component(red, numunits.color_component_rgba)
+    g = _resolve_color_component(green, numunits.color_component_rgba)
+    b = _resolve_color_component(blue, numunits.color_component_rgba)
+    a = _resolve_color_component(alpha, numunits.color_component_rgba)
+    return script.wrap_python_value(_color_rgba(r, g, b, a))
+
+@_ColorHSLType.f_construct.overload(("hue", [Integer, Float, Degrees, Radians, Percent]), ("saturation", [Integer, Float, Percent]), ("lightness", [Integer, Float, Percent]), ("alpha", WholeNumber(), numunits.color_component_rgba.UPPER))
+def ColorHSL_construct(self, hue:ScriptVariable[int|float|numunits.degrees|numunits.radians|numunits.percent], saturation:ScriptVariable[int|float|numunits.percent], lightness:ScriptVariable[int|float|numunits.percent], alpha:ScriptVariable):
+    h = hue.get()
+    if h.type.issubtype(Percent):
+        hd = float(h.inner) * 360 % 360
+    elif h.type.issubtype(Radians):
+        hd = math.degrees(float(h.inner))
+    else:
+        hd = float(h.inner)
+    return script.wrap_python_value(_color_hsla(hd, saturation.get().inner, lightness.get().inner, alpha.get().inner))
+
+@_ColorHSVType.f_construct.overload(("hue", [Integer, Float, Degrees, Radians, Percent]), ("saturation", [Integer, Float, Percent]), ("value", [Integer, Float, Percent]), ("alpha", WholeNumber(), numunits.color_component_rgba.UPPER))
+def ColorHSV_construct(self, hue:ScriptVariable[int|float|numunits.degrees|numunits.radians|numunits.percent], saturation:ScriptVariable[int|float|numunits.percent], value:ScriptVariable[int|float|numunits.percent], alpha:ScriptVariable):
+    h = hue.get()
+    if h.type.issubtype(Percent):
+        hd = float(h.inner) * 360 % 360
+    elif h.type.issubtype(Radians):
+        hd = math.degrees(float(h.inner))
+    else:
+        hd = float(h.inner)
+    return script.wrap_python_value(_color_hsla(hd, saturation.get().inner, value.get().inner, alpha.get().inner))
+
+@_ColorCMYKType.f_construct.overload(("cyan", [WholeNumber(), Percent]), ("magenta", [WholeNumber(), Percent]), ("yellow", [WholeNumber(), Percent]), ("key", [WholeNumber(), Percent]), ("alpha", [WholeNumber(), Percent], numunits.color_component_rgba.UPPER))
+def ColorCMYK_construct(self, cyan:ScriptVariable, magenta:ScriptVariable, yellow:ScriptVariable, key:ScriptVariable, alpha:ScriptVariable):
+    c = _resolve_color_component(cyan, numunits.color_component_cmyk)
+    m = _resolve_color_component(magenta, numunits.color_component_cmyk)
+    y = _resolve_color_component(yellow, numunits.color_component_cmyk)
+    k = _resolve_color_component(key, numunits.color_component_cmyk)
+    a = _resolve_color_component(alpha, numunits.color_component_rgba)
+    return script.wrap_python_value(_color_cmyka(c, m, y, k, a))
+
 f_list_from = ScriptFunction()
 f_map_from = ScriptFunction()
 f_is = ScriptFunction()
 f_issubtype = ScriptFunction()
 f_has = ScriptFunction()
 f_hasfunc = ScriptFunction()
-f_log = ScriptFunction()
+f_print = ScriptFunction()
 f_error = ScriptFunction()
 f_flush = ScriptFunction()
 f_wait = ScriptFunction()
@@ -1964,13 +2802,22 @@ f_reset = ScriptFunction()
 f_delete = ScriptFunction()
 f_delete_attribute = ScriptFunction()
 f_now = ScriptFunction()
+f_round = ScriptFunction()
+f_format = ScriptFunction()
+f_split = ScriptFunction()
+f_join = ScriptFunction()
+f_trim = ScriptFunction()
 
 trait_Appendable = utils.ScriptTrait("append", 0, [AnyType], dict(dtypes=[AnyType]))
 trait_Container = utils.ScriptTrait("contains", 0, [AnyType], dict(dtypes=[AnyType]))
 trait_Iterable = utils.ScriptTrait("iterate_over", 0, [AnyType])
 trait_CanFind = utils.ScriptTrait("find", 0, [AnyType], dict(dtypes=[AnyType]))
 trait_CanDelete = utils.ScriptTrait("delete", 0, [AnyType], dict(dtypes=[AnyType]))
-
+trait_Roundable = utils.ScriptTrait("round", 0, [AnyType])
+trait_Formattable = utils.ScriptTrait("format", 0, [AnyType])
+trait_Splittable = utils.ScriptTrait("split", 0, [AnyType])
+trait_CanJoinOn = utils.ScriptTrait("join", 0, [AnyType])
+trait_Trimmable = utils.ScriptTrait("trim", 0, [AnyType])
 
 @f_list_from.overload(("target", List))
 def list_from_list(target:ScriptVariable[list]):
@@ -2101,9 +2948,9 @@ def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.
 def function_hasfunc(ctx:ScriptContext, name:ScriptVariable[str]):
     return ScriptValue(Bool, name in ctx.script.function_table)
 
-@f_log.overload(dict(name="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, "\n"))
-def function_log(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
-    print(*((xv:=xi.get()).type.conv_str(xv).inner for xi in x), sep=sep.get().inner, end=end.get().inner)
+@f_print.overload(dict(name="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, "\n"))
+def function_print(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
+    print(*(utils.script_repr(xi.get()) for xi in x), sep=sep.get().inner, end=end.get().inner)
 
 @f_error.overload(dict(name="x", dtypes=[AnyType], pack=True), ("sep", String, " "), ("end", String, ""))
 def function_error(*x:ScriptVariable, sep:ScriptVariable[str], end:ScriptVariable[str]):
@@ -2451,14 +3298,26 @@ def delete_attribute(value:ScriptVariable, name:ScriptVariable[str]):
 def function_now():
     return script.wrap_python_value(datetime.now())
 
+@f_round.overload((""))
+def function_round():
+    ...
+
+@f_format.overload((""))
+def function_format():
+    ...
+
 def activate():
-    global Trait, List_Of, Map_Of, Pair_Of, Iterator_Of, Not_Type, All_Types
+    global Trait, List_Of, Map_Of, Pair_Of, Iterator_Of, Not_Type, All_Types, Any_Types, Whole_Number
     if not mimetypes.inited:
         mimetypes.init()
+    script.DATA_TYPE_TABLE[type] = Type
     script.DATA_TYPE_TABLE[NullType.inner] = NullType.init()
     script.DATA_TYPE_TABLE[List_readonly.inner] = List_readonly.init()
     script.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly.init()
     utils.DATA_TYPE_TABLE[MapItem.inner] = MapItem.init()
+    utils.add_type(ColorComponent, constructor=False)
+    utils.add_type(ColorComponentRGBA, constructor=False)
+    utils.add_type(ColorComponentCMYK, constructor=False)
     utils.add_type(Iterator, constructor=False)
     utils.add_type(RangeIterator, constructor=False)
     utils.add_type(IterableIterator, constructor=False)
@@ -2479,6 +3338,7 @@ def activate():
     Not_Type = utils.add_python_type(NotType, override_names=NotType.ANNOTATION_NAME)
     All_Types = utils.add_python_type(AllTypes, override_names=AllTypes.ANNOTATION_NAME)
     Any_Types = utils.add_python_type(AnyTypes, override_names=AnyTypes.ANNOTATION_NAME)
+    Whole_Number = utils.add_python_type(WholeNumber, override_names=WholeNumber.ANNOTATION_NAME)
 
     add_read_behavior("application/json", _read_file_json)
     add_write_behavior("application/json", _write_file_json)
@@ -2489,7 +3349,7 @@ def activate():
     utils.merge_function("issubtype", f_issubtype)
     utils.merge_function("has", f_has)
     utils.merge_function("hasfunc", f_hasfunc)
-    utils.merge_function("log", f_log)
+    utils.merge_function("print", f_print)
     utils.merge_function("error", f_error)
     utils.merge_function("flush", f_flush)
     utils.merge_function("wait", f_wait)
@@ -2508,12 +3368,16 @@ def activate():
     trait_CanDelete.merge_function(f_delete)
     utils.merge_function("delete_attribute", f_delete_attribute)
     utils.merge_function("now", f_now)
+    trait_Roundable.merge_function(f_round)
+    trait_Formattable.merge_function(f_format)
 
     utils.add_global("Appendable", trait_Appendable)
     utils.add_global("Container", trait_Container)
     utils.add_global("Iterable", trait_Iterable)
     utils.add_global("CanFind", trait_CanFind)
     utils.add_global("CanDelete", trait_CanDelete)
+    utils.add_global("Roundable", trait_Roundable)
+    utils.add_global("Formattable", trait_Formattable)
 
 def deactivate():
     utils.remove_type(NullType)
@@ -2548,7 +3412,7 @@ def deactivate():
     utils.remove_function("issubtype", f_issubtype)
     utils.remove_function("has", f_has)
     utils.remove_function("hasfunc", f_hasfunc)
-    utils.remove_function("log", f_log)
+    utils.remove_function("print", f_print)
     utils.remove_function("error", f_error)
     utils.remove_function("flush", f_flush)
     utils.remove_function("wait", f_wait)
@@ -2558,18 +3422,22 @@ def deactivate():
     utils.remove_function("write", f_write)
     trait_Appendable.remove_function(f_append)
     trait_CanFind.remove_function(f_find)
-    trait_Container.remove_function("contains", f_contains)
-    trait_Iterable.remove_function("iterate_over", f_iterate_over)
+    trait_Container.remove_function(f_contains)
+    trait_Iterable.remove_function(f_iterate_over)
     utils.remove_function("iterate_over_range", f_iterate_over_range)
     utils.remove_function("get", f_get)
     utils.remove_function("next", f_next)
     utils.remove_function("reset", f_reset)
-    trait_CanDelete.remove_function("delete", f_delete)
+    trait_CanDelete.remove_function(f_delete)
     utils.remove_function("delete_attribute", f_delete_attribute)
     utils.remove_function("now", f_now)
+    trait_Roundable.remove_function(f_round)
+    trait_Formattable.remove_function(f_format)
 
     utils.remove_global("Appendable", trait_Appendable)
     utils.remove_global("Container", trait_Container)
     utils.remove_global("Iterable", trait_Iterable)
     utils.remove_global("CanFind", trait_CanFind)
     utils.remove_global("CanDelete", trait_CanDelete)
+    utils.remove_global("Roundable", trait_Roundable)
+    utils.remove_global("Formattable", trait_Formattable)

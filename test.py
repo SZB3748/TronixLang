@@ -71,10 +71,22 @@ SCRIPT_FUNCTION_TABLE["test_exception"] = test_exception
 SCRIPT_FUNCTION_TABLE["rolist"] = f_rolist
 
 raw = r"""
-x = 2
-y = map()
-z = list()
-w = (x + y * z)
+print(color_cmyk.black)
+print(color_cmyk.white)
+print(color_hsl.black)
+print(color_hsl.white)
+print(color_hsv.black)
+print(color_hsv.white)
+print(color_rgb(1,2,3.0))
+print(color_hsl(1,2,3.0))
+print(color_hsv(1,2,3.0))
+print(color_cmyk(1,2,3.0,4))
+print(named_color("green"))
+loop i = iterate_over_range(0, 101); next(i) {
+    print(color_rgb(percent(i), i, 0))
+}
+print(named_color(percent(100), 0, 0))
+
 """
 
 

@@ -250,7 +250,7 @@ class TPUnexpectedEndOfCode(TParsingException):
                 return f"{self.__TNAME__}: {self}"
             self._set_context(ExceptionContext(node, step))
         info = _get_help_text_info(self._ctx.node, s)
-        return _base_help_text(info, "parsing", f"{self.__TNAME__}: {self}", clamp_to_line=False)
+        return _base_help_text(info, "parsing", f"{self.__TNAME__}: {self}")
 
 
 

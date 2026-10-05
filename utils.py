@@ -2,7 +2,7 @@ from .exceptions import *
 from .script import *
 from . import script
 import asyncio
-from typing import AsyncGenerator, AsyncIterable, Generator, Iterable
+from typing import AsyncGenerator, AsyncIterable, Generator, Iterable, get_args as t_get_args, get_origin as t_get_origin
 import xml.etree.ElementTree as ET
 import xml.dom.minidom
 
@@ -30,7 +30,7 @@ def add_type(dt:ScriptDataType, constructor:bool=True, init:bool=True):
     script.DATA_TYPE_TABLE[dt.inner] = dt
     if constructor:
         merge_function(dt.name, dt.construct)
-    script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(dt, dt.inner))
+    script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(script.DATA_TYPE_TABLE[type], dt.inner))
 
 def add_python_type(t:type, constructor:bool=True, init:bool=True, override_names:str|dict[str,str]|None=None):
     dt = script.wrap_python_type(t, override_names=override_names)
@@ -298,19 +298,26 @@ class ScriptAttributeNoAccess[T, K, U]:
 def __error_repr_attr_key(n:str|ScriptVariable):
     return script_repr(n.get()) if isinstance(n, script.ScriptVariable) else repr(n)
 
-_DEFAULT_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is get-only", error=exceptions.TRNotImplemented)
-_DEFAULT_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is assign-only", error=exceptions.TRNotImplemented)
-_DEFAULT_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {o.type.name} object is delete-only", error=exceptions.TRNotImplemented)
-_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRNotImplemented)
-_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRNotImplemented)
-_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete attribute {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRNotImplemented)
+def _entry_origin_s(o:ScriptValue):
+    if isinstance(o.inner, type):
+        return f"type {script.wrap_python_type(o.inner).name}"
+    else:
+        return f"{o.type.name} object"
 
-_DEFAULT_ITEM_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is get-only", error=exceptions.TRNotImplemented)
-_DEFAULT_ITEM_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is assign-only", error=exceptions.TRNotImplemented)
+
+_DEFAULT_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {_entry_origin_s(o)} is get-only", error=exceptions.TRNotImplemented)
+_DEFAULT_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {_entry_origin_s(o)} is assign-only", error=exceptions.TRNotImplemented)
+_DEFAULT_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"attribute {__error_repr_attr_key(n)} from {_entry_origin_s(o)} is delete-only", error=exceptions.TRNotImplemented)
+_DEFAULT_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get attribute {__error_repr_attr_key(n)} from {_entry_origin_s(o)}", error=exceptions.TRNotImplemented)
+_DEFAULT_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign attribute {__error_repr_attr_key(n)} from {_entry_origin_s(o)}", error=exceptions.TRNotImplemented)
+_DEFAULT_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete attribute {__error_repr_attr_key(n)} from {_entry_origin_s(o)}", error=exceptions.TRNotImplemented)
+
+_DEFAULT_ITEM_READONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {_entry_origin_s(o)} is get-only", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_WRITEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {_entry_origin_s(o)} is assign-only", error=exceptions.TRNotImplemented)
 _DEFAULT_ITEM_DELETEONLY_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"item at [{__error_repr_attr_key(n)}] from {o.type.name} object is delete-only", error=exceptions.TRNotImplemented)
-_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=exceptions.TRNotImplemented)
-_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=exceptions.TRNotImplemented)
-_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete item at [{__error_repr_attr_key(n)}] from {o.type.name} object", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_READ_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot get item at [{__error_repr_attr_key(n)}] from {_entry_origin_s(o)}", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_WRITE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign item at [{__error_repr_attr_key(n)}] from {_entry_origin_s(o)}", error=exceptions.TRNotImplemented)
+_DEFAULT_ITEM_DELETE_NO_ACCESS = ScriptAttributeNoAccess(lambda o, n, v: f"cannot delete item at [{__error_repr_attr_key(n)}] from {_entry_origin_s(o)}", error=exceptions.TRNotImplemented)
 
 _DEFAULT_ITEM_NOT_SUBSCRIPTABLE = ScriptAttributeNoAccess(lambda o, n, v: f"object of type {o.type.name} is not subscriptable", error=exceptions.TRNotImplemented)
 _DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot assign value of type {v.type().name} to {"item at" if isinstance(n, script.ScriptVariable) else "attribute"} {__error_repr_attr_key(n)} from {o.type.name} object", error=exceptions.TRTypeError)
@@ -324,6 +331,13 @@ def MethodGetAttribute(name:str|None=None, args:tuple=(), kwargs:dict[str]={})->
     def f(o:ScriptValue, n:str):
         return script.wrap_python_value(getattr(o.inner, name or n)(*args, **kwargs))
     return f
+
+def ValueGetAttribute[T](value:T|script.ScriptValue[T]):
+    def f(*_)->script.ScriptValue[T]:
+        return script.wrap_python_value(value)
+    return f
+    
+
 def SimpleSetAttribute(name:str|None=None)->AttributeSetter:
     def f(o:ScriptValue, n:str, v:ScriptVariable):
         x = v.get()
@@ -545,15 +559,22 @@ ATTR_ATTACH_ATTRS = "getattr", "setattr", "delattr"
 ATTR_ATTACH_ITEMS = "getitem", "setitem", "delitem"
 
 class ScriptAttributeHandler[T,K]:
-    def __init__(self, parent:"ScriptAttributeHandler|None"=None, wildcard:ScriptValueAttribute[T,K,Any]|None=None, no_subscripting:bool=False):
+    def __init__(self, parent:"ScriptAttributeHandler|None"=None, wildcard:ScriptValueAttribute[T,K,Any]|None=None, type_wildcard:ScriptValueAttribute[T,K,Any]|None=None, no_subscripting:bool=False, no_type_subscripting:bool=True):
         self.parent = parent
         self.no_subscripting = no_subscripting
+        self.no_type_subscripting = no_type_subscripting
         if no_subscripting:
             if not wildcard:
                 wildcard = ScriptValueAttribute("")
             wildcard = wildcard.itemgetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemsetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemdeleter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE)
+        if no_type_subscripting:
+            if not type_wildcard:
+                type_wildcard = ScriptValueAttribute("")
+            type_wildcard = type_wildcard.itemgetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemsetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemdeleter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE)
         self.wildcard = wildcard
         self.attributes:dict[str|K, ScriptValueAttribute[T,K,Any]] = {}
+        self.type_wildcard = type_wildcard
+        self.type_attributes:dict[str|K, ScriptValueAttribute[type[T],K,Any]] = {}
     
     def __getitem__(self, key:K):
         return self.attributes[key]
@@ -566,10 +587,24 @@ class ScriptAttributeHandler[T,K]:
             attr = attr.itemgetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemsetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemdeleter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE)
         return self.alias(attr, *aliases)
 
-    def alias[U](self, attr:ScriptValueAttribute[T,K,U], *aliases:K):
+    def type_entry[U](self, key:str|K, *aliases:str, vt:type[U]=Any):
+        if key in self.type_attributes:
+            raise KeyError(f"{repr(key)} already in attribute handler")
+        attr = self.type_attributes[key] = ScriptValueAttribute[type[T],K,U](key)
+        if self.no_type_subscripting:
+            attr = attr.itemgetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemsetter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE).itemdeleter(_DEFAULT_ITEM_NOT_SUBSCRIPTABLE)
+        return self.alias(attr, *aliases)
+
+    def alias[U](self, attr:ScriptValueAttribute[T,K,U], *aliases:str|K):
         for alias in aliases:
             self.attributes[alias] = attr
         return attr
+
+    def typeattr_alias[U](self, attr:ScriptValueAttribute[type[T],K,U], *aliases:str|K):
+        for alias in aliases:
+            self.type_attributes[alias] = attr
+        return attr
+
 
     def func_get(self):
         def getattr(_, object:ScriptValue[T], name:str):
@@ -581,6 +616,17 @@ class ScriptAttributeHandler[T,K]:
                 p = p.parent
             raise exceptions.TRBadAttribute(f"{object.type.name} object has no attribute {repr(name)}", name=name)
         return getattr
+
+    def handle_type_get(self, datatype:ScriptValue[type], name:str):
+        dt = script.wrap_python_type(datatype.inner)
+        attrs = getattr(dt, "attrs", None)
+        p = attrs if isinstance(attrs, ScriptAttributeHandler) else None
+        while p is not None:
+            attr = p.type_attributes.get(name, p.wildcard)
+            if not (attr is None or attr._get is None):
+                return attr._get(datatype, name)
+            p = p.parent
+        raise exceptions.TRBadAttribute(f"type {dt.name} has no attribute {repr(name)}", name=name)
     
     def func_getitem(self):
         def getitem(_, object:ScriptValue[T], key:ScriptVariable[K]):
@@ -594,6 +640,18 @@ class ScriptAttributeHandler[T,K]:
             raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
         return getitem
 
+    def handle_type_getitem(self, datatype:ScriptValue[type], key:ScriptVariable[K]):
+        dt = script.wrap_python_type(datatype.inner)
+        attrs = getattr(dt, "attrs", None)
+        p = attrs if isinstance(attrs, ScriptAttributeHandler) else None
+        keyx = key.get().inner
+        while p is not None:
+            attr = p.type_attributes.get(keyx, p.wildcard)
+            if not (attr is None or attr._get is None):
+                return attr._getitem(datatype, key)
+            p = p.parent
+        raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
+
     def func_set(self):
         def setattr(_, object:ScriptValue[T], name:str, value:ScriptVariable):
             p = self
@@ -605,6 +663,17 @@ class ScriptAttributeHandler[T,K]:
                 p = p.parent
             raise exceptions.TRBadAttribute(f"{object.type.name} object has no attribute {repr(name)}", name=name)
         return setattr
+
+    def handle_type_set(self, datatype:ScriptValue[type], name:str, value:ScriptVariable):
+        dt = script.wrap_python_type(datatype.inner)
+        attrs = getattr(dt, "attrs", None)
+        p = attrs if isinstance(attrs, ScriptAttributeHandler) else None
+        while p is not None:
+            attr = p.type_attributes.get(name, p.wildcard)
+            if not (attr is None or attr._get is None):
+                return attr._set(datatype, name, value)
+            p = p.parent
+        raise exceptions.TRBadAttribute(f"type {dt.name} has no attribute {repr(name)}", name=name)
     
     def func_setitem(self):
         def setitem(_, object:ScriptValue[T], key:ScriptVariable[K], value:ScriptVariable):
@@ -617,6 +686,18 @@ class ScriptAttributeHandler[T,K]:
                 p = p.parent
             raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
         return setitem
+
+    def handle_type_setitem(self, datatype:ScriptValue[type], key:ScriptVariable[K], value:ScriptVariable):
+        dt = script.wrap_python_type(datatype.inner)
+        attrs = getattr(dt, "attrs", None)
+        p = attrs if isinstance(attrs, ScriptAttributeHandler) else None
+        keyx = key.get().inner
+        while p is not None:
+            attr = p.type_attributes.get(keyx, p.wildcard)
+            if not (attr is None or attr._get is None):
+                return attr._setitem(datatype, key, value)
+            p = p.parent
+        raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
     
     def func_del(self):
         def delattr(_, object:ScriptValue[T], name:str):
@@ -629,6 +710,17 @@ class ScriptAttributeHandler[T,K]:
                 p = p.parent
             raise exceptions.TRBadAttribute(f"{object.type.name} object has no attribute {repr(name)}", name=name)
         return delattr
+
+    def handle_type_del(self, datatype:ScriptValue[type], name:str):
+        dt = script.wrap_python_type(datatype.inner)
+        attrs = getattr(dt, "attrs", None)
+        p = attrs if isinstance(attrs, ScriptAttributeHandler) else None
+        while p is not None:
+            attr = p.type_attributes.get(name, p.wildcard)
+            if not (attr is None or attr._get is None):
+                return attr._del(datatype, name)
+            p = p.parent
+        raise exceptions.TRBadAttribute(f"type {dt.name} has no attribute {repr(name)}", name=name)
     
     def func_delitem(self):
         def delitem(_, object:ScriptValue[T], key:ScriptVariable[K]):
@@ -641,6 +733,18 @@ class ScriptAttributeHandler[T,K]:
                 p = p.parent
             raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
         return delitem
+
+    def handle_type_delitem(self, datatype:ScriptValue[type], key:ScriptVariable[K]):
+        dt = script.wrap_python_type(datatype.inner)
+        attrs = getattr(dt, "attrs", None)
+        p = attrs if isinstance(attrs, ScriptAttributeHandler) else None
+        keyx = key.get().inner
+        while p is not None:
+            attr = p.type_attributes.get(keyx, p.wildcard)
+            if not (attr is None or attr._get is None):
+                return attr._delitem(datatype, key)
+            p = p.parent
+        raise exceptions.TRBadSubscript(key.type().repr(key.get()).inner, value=key)
     
     def make_funcs(self):
         return self.func_get(), self.func_set(), self.func_del(), self.func_getitem(), self.func_setitem(), self.func_delitem()
@@ -900,11 +1004,30 @@ class ScriptFunction[T]:
 
     def overload(self, *params:ScriptFunctionParam_Like, auto:bool=False, pass_ctx:bool=False, priority:int|None=None, pass_fit:bool=False):
         def decor(cb:Callable[..., ScriptValue]):
-            if auto and not params:
-                ... #TODO inspect function and determine types from annotations
+            AnyType = script.DATA_TYPE_TABLE[object]
+            if auto:
+                if pass_fit:
+                    raise ValueError("cannot create overload with auto and pass_fit both enabled")
+                plist = []
+                psig = inspect.signature(cb)
+                pp_i = bool(pass_ctx) + int(isinstance(self, BoundScriptFunction)) #skip self and ctx if needed
+                pparams = list(psig.parameters.values())[pp_i:]
+                #TODO make a converter wrapper function that converts the ScriptVariable arguments to the annotated type (unnecessary if all arguments are annotated with ScriptVariable)
+                def _unwrap_to_value(x:ScriptVariable):
+                    return x.get()
+                def _unwrap_to_inner(x:ScriptVariable):
+                    return x.get().inner
+                conversion_cbs:dict[str, Callable[[ScriptVariable], Any]] = {}
+                for plike, pparam in zip(params, pparams):
+                    param = _resolve_script_function_param_like(plike, AnyType)
+                    if pparam.annotation is not inspect._empty:
+                        if pparam.annotation is Any:
+                            ...
+                if len(param) > len(pparam):
+                    for i in range(len(pparam), len(params)):
+                        plist.append(_resolve_script_function_param_like(params[i]))
             else:
                 plist = []
-                AnyType = script.DATA_TYPE_TABLE[object]
                 for p in params:
                     plist.append(_resolve_script_function_param_like(p, AnyType))
                 self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx, pass_fit=pass_fit), cb, priority=priority)
@@ -1089,9 +1212,9 @@ class ScriptTrait(script.ScriptTypeAnnotation):
         return False
 
     def format_data(self):
-        tcs = [t.name if isinstance(t, script.ScriptDataType) else f"{t.ANNOTATION_NAME}[{t.format_data()}]" for t in self.target_type_constraints]
+        tcs = [script.format_script_type_annotation(t) for t in self.target_type_constraints]
         extra = [f"({", ".join("" if (v:=ex.get(name,None)) is None else v for name in _TRAIT_EXTRA_NAMES)})" for ex in self.extra]
-        return f"{self.ANNOTATION_NAME}[{self.func_name}, {self.target_index},{f" ({", ".join(tcs)})," if tcs else ""}{f" {", ".join(extra)}" if extra else ""}]"
+        return f"{self.func_name}, {self.target_index},{f" ({", ".join(tcs)})," if tcs else ""}{f" {", ".join(extra)}" if extra else ""}"
 
     def merge_function(self, f:ScriptFunction):
         for overload in f.signature.overloads:
