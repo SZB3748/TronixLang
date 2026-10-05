@@ -324,12 +324,20 @@ _DEFAULT_WRITE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n, v: f"cannot ass
 _DEFAULT_DELETE_WRONG_TYPE = ScriptAttributeNoAccess(lambda o, n: f"cannot delete {f"item at value of type {n.type().name}" if isinstance(n, script.ScriptVariable) else "attribute"} from {o.type.name} object", error=exceptions.TRTypeError)
 
 def SimpleGetAttribute(name:str|None=None)->AttributeGetter:
-    def f(o:ScriptValue, n:str):
-        return script.wrap_python_value(getattr(o.inner, name or n))
+    if name is None:
+        def f(o:ScriptValue, n:str):
+            return script.wrap_python_value(getattr(o.inner, n))
+    else:
+        def f(o:ScriptValue, _):
+            return script.wrap_python_value(getattr(o.inner, name))
     return f
 def MethodGetAttribute(name:str|None=None, args:tuple=(), kwargs:dict[str]={})->AttributeGetter:
-    def f(o:ScriptValue, n:str):
-        return script.wrap_python_value(getattr(o.inner, name or n)(*args, **kwargs))
+    if name is None:
+        def f(o:ScriptValue, n:str):
+            return script.wrap_python_value(getattr(o.inner, n)(*args, **kwargs))
+    else:
+        def f(o:ScriptValue, _):
+            return script.wrap_python_value(getattr(o.inner, name)(*args, **kwargs))
     return f
 
 def ValueGetAttribute[T](value:T|script.ScriptValue[T]):
@@ -339,67 +347,165 @@ def ValueGetAttribute[T](value:T|script.ScriptValue[T]):
     
 
 def SimpleSetAttribute(name:str|None=None)->AttributeSetter:
-    def f(o:ScriptValue, n:str, v:ScriptVariable):
-        x = v.get()
-        setattr(o.inner, name or n, x.inner)
-        return x
+    if name is None:
+        def f(o:ScriptValue, n:str, v:ScriptVariable):
+            x = v.get()
+            setattr(o.inner, n, x.inner)
+            return x
+    else:
+        def f(o:ScriptValue, _, v:ScriptVariable):
+            x = v.get()
+            setattr(o.inner, name, x.inner)
+            return x
     return f
+
 def SimpleDelAttribute(name:str=None, pop:bool=True)->AttributeDeleter:
     if pop:
-        def f(o:ScriptValue, n):
-            nn = name or n
-            x = o.type.getattr(o, nn)
-            delattr(o.inner, nn)
-            return x
+        if name is None:
+            def f(o:ScriptValue, n:str):
+                x = o.type.getattr(o, n)
+                delattr(o.inner, n)
+                return x
+        else:
+            def f(o:ScriptValue, _):
+                x = o.type.getattr(o, name)
+                delattr(o.inner, name)
+                return x
+    elif name is None:
+        def f(o:ScriptValue, n:str):
+            delattr(o.inner, n)
     else:
-        def f(o:ScriptValue, n):
-            delattr(o.inner, name or n)
+        def f(o:ScriptValue, _):
+            delattr(o.inner, name)
     return f
 
-__ITEM_SIMPLE_NO_OVERRIDE = object()
+_ITEM_SIMPLE_NO_OVERRIDE = object()
 
-def SimpleGetItem(key:Any=__ITEM_SIMPLE_NO_OVERRIDE)->AttributeItemGetter:
-    def f(o:ScriptValue, n:ScriptVariable):
-        return script.wrap_python_value(o.inner[n.get().inner if key is __ITEM_SIMPLE_NO_OVERRIDE else key])
-    return f
-def SimpleSetItem(key:Any=__ITEM_SIMPLE_NO_OVERRIDE)->AttributeItemSetter:
-    def f(o:ScriptValue, n:ScriptVariable, v:ScriptVariable):
-        x = v.get()
-        o.inner[n.get().inner if key is __ITEM_SIMPLE_NO_OVERRIDE else key] = x.inner
-        return x
-    return f
-def SimpleDelItem(key:Any=__ITEM_SIMPLE_NO_OVERRIDE, pop:bool=True)->AttributeItemDeleter:
-    if pop:
-        kvar = None if key is __ITEM_SIMPLE_NO_OVERRIDE else script.ScriptVariable(script.wrap_python_value(key))
+def SimpleGetItem(key:Any=_ITEM_SIMPLE_NO_OVERRIDE)->AttributeItemGetter:
+    if key is _ITEM_SIMPLE_NO_OVERRIDE:
         def f(o:ScriptValue, n:ScriptVariable):
-            v = kvar or n
-            x = o.type.getitem(o, v)
-            del o.inner[v.get().inner]
+            return script.wrap_python_value(o.inner[n.get().inner])
+    else:
+        def f(o:ScriptValue, _):
+            return script.wrap_python_value(o.inner[key])
+    return f
+
+def SimpleSetItem(key:Any=_ITEM_SIMPLE_NO_OVERRIDE)->AttributeItemSetter:
+    if key is _ITEM_SIMPLE_NO_OVERRIDE:
+        def f(o:ScriptValue, n:ScriptVariable, v:ScriptVariable):
+            x = v.get()
+            o.inner[n.get().inner] = x.inner
             return x
     else:
-        def f(o:ScriptValue, n:ScriptVariable):
-            del o.inner[n.get().inner if key is __ITEM_SIMPLE_NO_OVERRIDE else key]
+        def f(o:ScriptValue, _, v:ScriptVariable):
+            x = v.get()
+            o.inner[key] = x.inner
+            return x
     return f
-def SimpleGetAttributeAsItem(name:str|None=None)->AttributeItemGetter:
-    def f(o:ScriptValue, n:ScriptVariable):
-        return script.wrap_python_value(getattr(o.inner, name or n.get().inner))
-    return f
-def SimpleSetAttributeAsItem(name:str|None=None)->AttributeItemSetter:
-    def f(o:ScriptValue, n:ScriptVariable, v:ScriptVariable):
-        x = v.get()
-        setattr(o.inner, name or n.get().inner, x.inner)
-        return x
-    return f
-def SimpleDelAttributeAsItem(name:str|None=None, pop:bool=True)->AttributeItemDeleter:
+
+def SimpleDelItem(key:Any=_ITEM_SIMPLE_NO_OVERRIDE, pop:bool=True)->AttributeItemDeleter:
     if pop:
+        if key is _ITEM_SIMPLE_NO_OVERRIDE:
+            def f(o:ScriptValue, n:ScriptVariable):
+                x = o.type.getitem(o, n)
+                del o.inner[n.get().inner]
+                return x
+        else:
+            def f(o:ScriptValue, _):
+                x = o.type.getitem(o, script.ScriptVariable(script.wrap_python_value(key)))
+                del o.inner[key]
+                return x
+    elif key is _ITEM_SIMPLE_NO_OVERRIDE:
         def f(o:ScriptValue, n:ScriptVariable):
-            nn = name or n.get().inner
-            x = o.type.getattr(o, nn)
-            delattr(o.inner, nn)
+            del o.inner[n.get().inner]
+    else:
+        def f(o:ScriptValue, _):
+            del o.inner[key]
+    return f
+
+def ItemGetAttribute(name:str|None=None)->AttributeItemGetter:
+    if name is None:
+        def f(o:ScriptValue, n:ScriptVariable):
+            return script.wrap_python_value(getattr(o.inner, n.get().inner))
+    else:
+        def f(o:ScriptValue, _):
+            return script.wrap_python_value(getattr(o.inner, name))
+    return f
+
+def ItemSetAttribute(name:str|None=None)->AttributeItemSetter:
+    if name is None:
+        def f(o:ScriptValue, n:ScriptVariable, v:ScriptVariable):
+            x = v.get()
+            setattr(o.inner, n.get().inner, x.inner)
             return x
     else:
+        def f(o:ScriptValue, _, v:ScriptVariable):
+            x = v.get()
+            setattr(o.inner, name, x.inner)
+            return x
+    return f
+
+def ItemDelAttribute(name:str|None=None, pop:bool=True)->AttributeItemDeleter:
+    if pop:
+        if name is None:
+            def f(o:ScriptValue, n:ScriptVariable):
+                nn = n.get().inner
+                x = o.type.getattr(o, nn)
+                delattr(o.inner, nn)
+                return x
+        else:
+            def f(o:ScriptValue, _):
+                x = o.type.getattr(o, name)
+                delattr(o.inner, name)
+                return x
+    elif name is None:
         def f(o:ScriptValue, n:ScriptVariable):
-            delattr(o.inner, name or n.get().inner)
+            delattr(o.inner, n.get().inner)
+    else:
+        def f(o:ScriptValue, _):
+            delattr(o.inner, name)
+    return f
+
+def AttributeGetItem(key:Any=_ITEM_SIMPLE_NO_OVERRIDE):
+    if key is None:
+        def f(o:ScriptValue, n:str):
+            return script.wrap_python_value(o.inner[n if key is _ITEM_SIMPLE_NO_OVERRIDE else key])
+    else:
+        def f(o:ScriptValue, n:str):
+            return script.wrap_python_value(o.inner[n if key is _ITEM_SIMPLE_NO_OVERRIDE else key])
+    return f
+
+def AttributeSetItem(key:Any=_ITEM_SIMPLE_NO_OVERRIDE):
+    if key is None:
+        def f(o:ScriptValue, n:str, v:ScriptVariable):
+            x = v.get()
+            o.inner[n] = x.inner
+            return x
+    else:
+        def f(o:ScriptValue, _, v:ScriptVariable):
+            x = v.get()
+            o.inner[key] = x.inner
+            return x
+    return f
+
+def AttributeDelItem(key:Any=_ITEM_SIMPLE_NO_OVERRIDE, pop:bool=True):
+    if pop:
+        if key is None:
+            def f(o:ScriptValue, n:str):
+                x = o.type.getitem(o, script.ScriptVariable(script.wrap_python_value(n)))
+                del o.inner[n]
+                return x
+        else:
+            def f(o:ScriptValue, _):
+                x = o.type.getitem(o, script.ScriptVariable(script.wrap_python_value(key)))
+                del o.inner[key]
+                return x
+    elif key is None:
+        def f(o:ScriptValue, n:str):
+            del o.inner[n]
+    else:
+        def f(o:ScriptValue, _):
+            del o.inner[key]
     return f
 
 def TypedSetter(ts:type|ScriptDataType|ScriptTypeAnnotation|list[type|ScriptDataType|ScriptTypeAnnotation], f:AttributeSetter|AttributeItemSetter|None=None, no_access:ScriptAttributeNoAccess|None=None):
