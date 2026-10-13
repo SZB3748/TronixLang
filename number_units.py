@@ -474,40 +474,40 @@ class _functional_integer(int):
         return self._copy(super(_functional_integer, self).__pos__())
 
     def __add__(self, value):
-        return self._copy(super(_functional_integer, self).__add__(value))
+        return self._copy(int(self) + value)
 
     def __sub__(self, value):
-        return self._copy(super(_functional_integer, self).__sub__(value))
+        return self._copy(int(self) - value)
 
     def __mul__(self, value):
-        return self._copy(super(_functional_integer, self).__mul__(value))
+        return self._copy(int(self) * value)
 
     def __truediv__(self, value):
-        return self._copy(super(_functional_integer, self).__truediv__(value))
+        return self._copy(int(self) / value)
 
     def __floordiv__(self, value):
-        return self._copy(super(_functional_integer, self).__floordiv__(value))
+        return self._copy(int(self) // value)
 
     def __pow__(self, value):
-        return self._copy(super(_functional_integer, self).__pow__(value))
+        return self._copy(int(self) ** value)
 
     def __mod__(self, value):
-        return self._copy(super(_functional_integer, self).__mod__(value))
+        return self._copy(int(self) % value)
 
     def __radd__(self, value):
-        return self._copy(super(_functional_integer, self).__radd__(value))
+        return self._copy(value + int(self))
 
     def __rsub__(self, value):
-        return self._copy(super(_functional_integer, self).__rsub__(value))
+        return self._copy(value - int(self))
 
     def __rmul__(self, value):
-        return self._copy(super(_functional_integer, self).__rmul__(value))
+        return self._copy(value * int(self))
 
     def __rtruediv__(self, value):
-        return self._copy(super(_functional_integer, self).__rtruediv__(value))
+        return self._copy(value / int(self))
 
     def __rfloordiv__(self, value):
-        return self._copy(super(_functional_integer, self).__rfloordiv__(value))
+        return self._copy(value // int(self))
 
     def __eq__(self, value):
         if isinstance(value, _functional_integer):
@@ -588,7 +588,7 @@ class color_component(_functional_integer):
             raise ValueError(f"{type(self).__name__} object must be in range {self.LOWER}-{self.UPPER}, got {int(self)}")
 
     def _copy(self, value):
-        if isinstance(value, int):
+        if isinstance(value, (int, float)):
             cls = type(self)
             new = cls.__new__(cls, min(max(self.LOWER, value), self.UPPER))
             new.__dict__.update(self.__dict__)

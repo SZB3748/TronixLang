@@ -177,30 +177,246 @@ class _NameValuePairType(ScriptDataType[ScriptNameValuePair]):
             sv = f"{n}:{vt.repr(script._convert_script_value(v)).inner}"
         return script.ScriptValue(String, sv)
 
-class _pair[T,U]:
-    def __init__(self, first:T, second:U):
-        self.first = first
-        self.second = second
+class group:
 
-    def __getitem__(self, index:int):
-        if index == 0 or index == -1:
-            return self.first
-        elif index == 1 or index == -2:
-            return self.second
-        raise IndexError("pair index out of range")
+    N:int|None = None
+    NAMES:tuple[str|None]|None = None
+    TYPES:tuple[str|type|ScriptDataType|ScriptTypeAnnotation]|None = None
+
+    @staticmethod
+    def prop(i:int|str):
+        @property
+        def p(self:group):
+            return self[i]
+        @p.setter
+        def p(self:group, value):
+            self[i] = value
+        return p
+        
+    @classmethod
+    def _make_set_func(cls):
+        def f(o:ScriptValue[group], k:str|ScriptVariable, v:ScriptVariable):
+            NAMES = o.type.inner.NAMES
+            TYPES = o.type.inner.TYPES
+            x = k
+            if isinstance(k, ScriptVariable):
+                k = k.get().inner
+            if isinstance(k, str):
+                try:
+                    index = NAMES.index(k)
+                except ValueError:
+                    NAMES = None
+                if NAMES is None:
+                    if isinstance(x, ScriptVariable):
+                        raise exceptions.TRBadSubscript(f"{o.type.name} object has no component with name: {repr(k)}", value=k)
+                    else:
+                        raise exceptions.TRBadAttribute(f"{o.type.name} object has no component with name: {repr(k)}", name=k)
+            elif isinstance(k, int):
+                index = k
+            else:
+                utils._DEFAULT_WRITE_WRONG_TYPE_KEY(o, x, v)
+
+            vv = v.get()
+            if TYPES is None or index >= len(TYPES):
+                type_correct = True
+            else:
+                t = TYPES[index]
+                if isinstance(t, str):
+                    t = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    t = script.wrap_python_type(t)
+                if isinstance(t, script.ScriptDataType):
+                    type_correct = vv.type.issubtype(t)
+                else:
+                    type_correct = vv.isinstance(t)
+            if type_correct:
+                o.inner[index] = vv.inner
+                return vv
+            else:
+                utils._DEFAULT_WRITE_WRONG_TYPE(o, x, v)
+        return f
+
+    @classmethod
+    def setup[T,K](cls, ah:utils.ScriptAttributeHandler[T,K]):
+        if cls.N is None:
+            if ah.wildcard is None:
+                ah.wildcard = utils.ScriptValueAttribute("")
+            sf = cls._make_set_func()
+            ah.wildcard\
+                .itemgetter(utils.TypedGetter(int, utils.SimpleGetItem()))\
+                .itemsetter(sf)\
+                .itemnodel()\
+                .getter(utils.AttributeGetItem())\
+                .setter(sf)\
+                .nodel()
+        elif cls.NAMES is None:
+            if cls.TYPES is None:
+                for i in range(cls.N):
+                    ah.entry(i)\
+                        .itemgetter(utils.SimpleGetItem(i))\
+                        .itemsetter(utils.SimpleSetItem(i))\
+                        .itemnodel()
+            else:
+                for i, t in zip(range(cls.N), cls.TYPES):
+                    if isinstance(t, str):
+                        t = script.parse_script_type_annotation(t)
+                    ah.entry(i)\
+                        .itemgetter(utils.SimpleGetItem(i))\
+                        .itemsetter(utils.TypedSetter(t, utils.SimpleSetItem(i)))\
+                        .itemnodel()
+                for i in range(len(cls.TYPES), cls.N):
+                    ah.entry(i)\
+                        .itemgetter(utils.SimpleGetItem(i))\
+                        .itemsetter(utils.SimpleSetItem(i))\
+                        .itemnodel()
+        elif cls.TYPES is None:
+            for i in range(cls.N):
+                n = cls.NAMES[i] if i < len(cls.NAMES) else None
+                ah.entry(i)\
+                    .itemgetter(utils.SimpleGetItem(i))\
+                    .itemsetter(utils.SimpleSetItem(i))\
+                    .itemnodel()
+                if n is not None:
+                    ah.entry(n)\
+                        .getter(utils.AttributeGetItem(i))\
+                        .setter(utils.AttributeSetItem(i))\
+                        .nodel()\
+                        .itemgetter(utils.SimpleGetItem(i))\
+                        .itemsetter(utils.SimpleSetItem(i))\
+                        .itemnodel()
+        else:
+            for i, t in zip(range(cls.N), cls.TYPES):
+                n = cls.NAMES[i] if i < len(cls.NAMES) else None
+                if isinstance(t, str):
+                    t = script.parse_script_type_annotation(t)
+                ah.entry(i)\
+                    .itemgetter(utils.SimpleGetItem(i))\
+                    .itemsetter(utils.TypedSetter(t, utils.SimpleSetItem(i)))\
+                    .itemnodel()
+                if n is not None:
+                    ah.entry(n)\
+                        .getter(utils.AttributeGetItem(i))\
+                        .setter(utils.TypedSetter(t, utils.AttributeSetItem(i)))\
+                        .nodel(utils._DEFAULT_DELETE_NO_ACCESS)\
+                        .itemgetter(utils.SimpleGetItem(i))\
+                        .itemsetter(utils.TypedSetter(t, utils.SimpleSetItem(i)))\
+                        .itemnodel()
+            for i in range(len(cls.TYPES), cls.N):
+                n = cls.NAMES[i] if i < len(cls.NAMES) else None
+                ah.entry(i)\
+                    .itemgetter(utils.SimpleGetItem(i))\
+                    .itemsetter(utils.SimpleSetItem(i))\
+                    .itemnodel()
+                if n is not None:
+                    ah.entry(n)\
+                        .getter(utils.AttributeGetItem(i))\
+                        .setter(utils.AttributeSetItem(i))\
+                        .nodel(utils._DEFAULT_DELETE_NO_ACCESS)\
+                        .itemgetter(utils.SimpleGetItem(i))\
+                        .itemsetter(utils.SimpleSetItem(i))\
+                        .itemnodel()
+        return ah
+
+    def __init__(self, *values):
+        if not (self.N is None or len(values) == self.N):
+            raise TypeError(f"Tried to give {len(values)} values to a group of length {self.N}")
+        if self.TYPES is not None:
+            for i, (t, v) in enumerate(zip(self.TYPES, values)):
+                if not self._validate_type(t, v):
+                    raise TypeError(f"group component at index {i} is of the wrong type")
+        self.values = list(values)
+
+    def _resolve_name(self, key:str):
+        if self.NAMES is None:
+            raise ValueError(f"group has no named components")
+        try:
+            return self.NAMES.index(key)
+        except ValueError:
+            raise KeyError(f"group has no component named {repr(key)}")
+
+    @staticmethod
+    def _validate_type(t:str|type|ScriptDataType|ScriptTypeAnnotation, v):
+        if isinstance(t, str):
+            t = script.parse_script_type_annotation(t)
+        elif isinstance(t, type):
+            return isinstance(v, t)
+        if isinstance(t, script.ScriptDataType):
+            return script.wrap_python_value(v).type.issubtype(t)
+        else:
+            return t.compare(v)
+
+    @staticmethod
+    def _compare_type(t:str|type|ScriptDataType|ScriptTypeAnnotation, vt:ScriptDataType|ScriptTypeAnnotation):
+        if isinstance(t, str):
+            t = script.parse_script_type_annotation(t)
+        elif isinstance(t, type):
+            return issubclass(vt.inner, t)
+        else:
+            return vt == t
+
+    def _validate_type_at(self, index:int, v):
+        if self.TYPES is None or index >= len(self.TYPES):
+            return True
+        return self._validate_type(self.TYPES[index], v)
+
+    def __getitem__(self, key:int|str):
+        if isinstance(key, str):
+            key = self._resolve_name(key)
+        return self.values[key]
     
-    def __setitem__(self, index:int, value):
-        if index == 0 or index == -1:
-            self.first:T = value
-        elif index == 1 or index == -2:
-            self.second:U = value
-        raise IndexError("pair index out of range")
+    def __setitem__(self, key:int|str, value):
+        if isinstance(key, str):
+            key = self._resolve_name(key)
+        self.values[key] = value
+        return value
+    
+    def __delitem__(self, key:int|str):
+        if isinstance(key, str):
+            key = self._resolve_name(key)
+        del self.values[key]
 
     def __iter__(self):
-        yield self.first
-        yield self.second
+        yield from self.values
 
-_PairTypeAttrs = utils.ScriptAttributeHandler[_pair, int]()
+_GroupTypeAttrs = utils.ScriptAttributeHandler[group, int|str]()
+@_GroupTypeAttrs.enforce_child_attrs()
+@_GroupTypeAttrs.attach
+class _GroupType(ScriptDataType[group]):
+
+    f_construct = construct = utils.ScriptFunction()
+
+    attrs = group.setup(_GroupTypeAttrs)
+
+    attrs.type_entry("COMPONENT_COUNT").readonly(lambda o,n: script.wrap_python_value(o.inner.N))
+    attrs.type_entry("COMPONENT_NAMES").readonly(lambda o,n: script.wrap_python_value(_rolist_wrapper(NAMES)) if (NAMES:=o.inner.NAMES) else null)
+    attrs.type_entry("COMPONENT_TYPES").readonly(lambda o,n: script.wrap_python_value(_rolist_wrapper(TYPES)) if (TYPES:=o.inner.TYPES) else null)
+
+
+class _pair[T,U](group):
+
+    N = 2
+    NAMES = ("first", "second")
+
+    def __init__(self, first:T, second:U):
+        super().__init__(first, second)
+    
+    @property
+    def first(self)->T:
+        return self[0]
+
+    @first.setter
+    def first(self, value:T):
+        self[0] = value
+
+    @property
+    def second(self)->U:
+        return self[1]
+    
+    @second.setter
+    def second(self, value:U):
+        self[1] = value
+
+_PairTypeAttrs = utils.ScriptAttributeHandler[_pair, int|str]((None, _GroupTypeAttrs))
 @_PairTypeAttrs.enforce_child_attrs()
 @_PairTypeAttrs.attach
 class _PairType(ScriptDataType[_pair]):
@@ -221,11 +437,11 @@ class _PairType(ScriptDataType[_pair]):
         return v
 
 
-    attrs = _PairTypeAttrs
-    attrs.entry("first").getter(utils.SimpleGetAttribute("first")).setter(utils.SimpleSetAttribute("first"))
-    attrs.entry("second").getter(utils.SimpleGetAttribute("second")).setter(utils.SimpleSetAttribute("second"))
-    attrs.entry(0).itemgetter(utils.SimpleGetItem(0)).itemsetter(utils.SimpleSetItem(0)).itemnodel()
-    attrs.entry(1).itemgetter(utils.SimpleGetItem(1)).itemsetter(utils.SimpleSetItem(1)).itemnodel()
+    attrs = _pair.setup(_PairTypeAttrs)
+    # attrs.entry("first").getter(utils.SimpleGetAttribute("first")).setter(utils.SimpleSetAttribute("first"))
+    # attrs.entry("second").getter(utils.SimpleGetAttribute("second")).setter(utils.SimpleSetAttribute("second"))
+    # attrs.entry(0).itemgetter(utils.SimpleGetItem(0)).itemsetter(utils.SimpleSetItem(0)).itemnodel()
+    # attrs.entry(1).itemgetter(utils.SimpleGetItem(1)).itemsetter(utils.SimpleSetItem(1)).itemnodel()
 
     def repr(self, value):
         return script.ScriptValue(String, f"{self.name}({(fv:=wrap_python_value(value.inner.first)).type.repr(fv).inner}, {(sv:=wrap_python_value(value.inner.second)).type.repr(sv).inner})")
@@ -652,6 +868,76 @@ class MapOf(script.ScriptTypeAnnotation):
         valstr = "|".join(script.format_script_type_annotation for t in self._resolve_values())
         return f"{keystr}, {valstr}"
 
+class GroupOf(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "group_of"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, ",")
+        return cls(*(script.parse_script_type_annotation(part) for part in parts))
+
+    def __init__(self, *types:script.ScriptDataType|script.ScriptTypeAnnotation|type|str):
+        if not types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
+        self.types = list(types)
+        self._resolved = False
+
+    def _resolve_types(self):
+        if not self._resolved:
+            for i, t in enumerate(self.types):
+                if isinstance(t, str):
+                    self.types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.types[i] = script.wrap_python_type(t)
+            self._resolved = True
+        return self.types
+    
+    def __eq__(self, other):
+        if isinstance(other, GroupOf):
+            return len(self._resolve_types()) == len(other._resolve_types()) and all(t in other.types for t in self.types)
+        elif isinstance(other, script.ScriptDataType):
+            if other.issubtype(Group):
+                gt:type[group] = other.inner
+                N = gt.N
+                TYPES = gt.TYPES
+                if N is not None and N != len(self.types):
+                    return False
+                rts = self._resolve_types()
+                if TYPES is None:
+                    return True
+                elif len(TYPES) > len(self.types):
+                    return False
+                for tt in zip(TYPES, rts):
+                    if not gt._compare_type(*tt):
+                        return False
+                return True
+        else:
+            return False
+
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            if not other.type.issubtype(Group):
+                return False
+            assert isinstance(other.inner, group)
+            g = other.inner
+        elif not isinstance(other, group):
+            return False
+        else:
+            g = other
+        
+        if len(g.values) != len(self.types):
+            return False
+        
+        for v,rt in zip(g.values, self._resolve_types()):
+            if not g._validate_type(rt, v):
+                return False
+        return True
+    
+    def format_data(self):
+        return ", ".join(script.format_script_type_annotation(t) for t in self._resolve_types())
+
+
 class PairOf(script.ScriptTypeAnnotation):
 
     ANNOTATION_NAME = "pair_of"
@@ -1039,6 +1325,19 @@ class _iterator[T](numunits._functional_integer):
     def python_iterate(self)->Iterable[T]:
         raise NotImplementedError
 
+class _null_iterator[T](_iterator[None]):
+    def python_iterate(self):
+        raise StopIteration
+
+    async def next(self):
+        return None
+
+    async def get(self):
+        return None
+    
+    async def reset(self)->Self:
+        return self._copy(0)
+
 class _range_iterator[T](_iterator[T]):
     def __init__(self, value:int, start:int, stop:int, step:int):
         self.start = start
@@ -1194,6 +1493,9 @@ def make_iterator_type[X:_iterator](name:str, it_t:type[X], parent:type[_Iterato
     _subt.__name__ = name
     return _subt
 
+_NullIteratorType = make_iterator_type("_NullIteratorType", _null_iterator, _IteratorType)
+_NullIteratorTypeAttrs:utils.ScriptAttributeHandler[_null_iterator,Any] = _NullIteratorType.attrs
+_NullIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name}>")
 _RangeIteratorType = make_iterator_type("_RangeIteratorType", _range_iterator, _IteratorType)
 _RangeIteratorTypeAttrs:utils.ScriptAttributeHandler[_range_iterator,Any] = _RangeIteratorType.attrs
 _RangeIteratorType.repr = lambda self, value: script.wrap_python_value(f"<{value.type.name} [{int(value.inner)}] from {value.inner.start} until {value.inner.stop} (step {value.inner.step})>")
@@ -1282,7 +1584,7 @@ class _UUIDType(ScriptDataType[uuid.UUID]):
         return uuid.UUID(x)
 
 
-class _color:
+class _color(group):
     def to_rgba(self)->tuple[int,int,int,int]:
         raise NotImplementedError
 
@@ -1307,15 +1609,6 @@ class _color:
             return self.to_cmyka()
         else:
             return self.to_rgba()
-
-
-    def __getitem__(self, key):
-        if not isinstance(key, int):
-            raise TypeError(f"must use int to subscript color for component item, got {type(key).__name__}")
-        return self._to_this()[key]
-
-    def __iter__(self):
-        return iter(self._to_this())
 
     def __add__(self, other):
         return type(self)(*(x+other for x in self._to_this()))
@@ -1378,6 +1671,10 @@ class _color:
     
 
 class _color_name(_color):
+
+    N = 2
+    NAMES = "name", "alpha"
+    TYPES = str, numunits.color_component_rgba
 
     #CITE: https://developer.mozilla.org/en-US/docs/Web/CSS/Reference/Values/named-color
     NAME_MAP:dict[str, tuple[int,int,int,int]] = dict(
@@ -1538,8 +1835,13 @@ class _color_name(_color):
             return cls(name, a=a)
 
     def __init__(self, name:str, a:int=numunits.color_component_rgba.UPPER):
-        self.name = name
-        self.a = a
+        super().__init__(name, numunits.color_component_rgba(a))
+
+    name:str
+    a:numunits.color_component_rgba
+
+    name = group.prop(0)
+    a = group.prop(1)
 
     def __str__(self):
         return self.name
@@ -1561,11 +1863,28 @@ class _color_name(_color):
         
 
 class _color_rgba(_color):
+
+    N = 4
+    NAMES = "red", "green", "blue", "alpha"
+    TYPES = numunits.color_component_rgba, numunits.color_component_rgba, numunits.color_component_rgba, numunits.color_component_rgba
+
     def __init__(self, r:int, g:int, b:int, a:int=numunits.color_component_rgba.UPPER):
-        self.r = numunits.color_component_rgba(r)
-        self.g = numunits.color_component_rgba(g)
-        self.b = numunits.color_component_rgba(b)
-        self.a = numunits.color_component_rgba(a)
+        super().__init__(
+            numunits.color_component_rgba(r),
+            numunits.color_component_rgba(g),
+            numunits.color_component_rgba(b),
+            numunits.color_component_rgba(a)
+        )
+
+    r:numunits.color_component_rgba
+    g:numunits.color_component_rgba
+    b:numunits.color_component_rgba
+    a:numunits.color_component_rgba
+
+    r = group.prop(0)
+    g = group.prop(1)
+    b = group.prop(2)
+    a = group.prop(3)
 
     def to_rgba(self):
         return self.r, self.g, self.b, self.a
@@ -1651,11 +1970,28 @@ class _color_rgba(_color):
 
 
 class _color_hsla(_color):
+
+    N = 4
+    NAMES = "hue", "saturation", "lightness", "alpha"
+    TYPES = numunits.degrees, numunits.percent, numunits.percent, numunits.color_component_rgba
+
     def __init__(self, h:numunits.degrees, s:numunits.percent, l:numunits.percent, a:int=numunits.color_component_rgba.UPPER):
-        self.h = numunits.degrees(float(h))
-        self.s = numunits.percent(float(s))
-        self.l = numunits.percent(float(l))
-        self.a = numunits.color_component_rgba(a)
+        super().__init__(
+            numunits.degrees(float(h)),
+            numunits.percent(float(s)),
+            numunits.percent(float(l)),
+            numunits.color_component_rgba(a)
+        )
+
+    h:numunits.degrees
+    s:numunits.percent
+    l:numunits.percent
+    a:numunits.color_component_rgba
+
+    h = group.prop(0)
+    s = group.prop(1)
+    l = group.prop(2)
+    a = group.prop(3)
 
     def to_rgba(self):
         hv = self.h.value
@@ -1710,11 +2046,28 @@ class _color_hsla(_color):
     _to_this = to_hsla
 
 class _color_hsva(_color):
+
+    N = 4
+    NAMES = "hue", "saturation", "value", "alpha"
+    TYPES = numunits.degrees, numunits.percent, numunits.percent, numunits.color_component_rgba
+
     def __init__(self, h:numunits.degrees, s:numunits.percent, v:numunits.percent, a:int=numunits.color_component_rgba.UPPER):
-        self.h = numunits.degrees(float(h))
-        self.s = numunits.percent(float(s))
-        self.v = numunits.percent(float(v))
-        self.a = numunits.color_component_rgba(a)
+        super().__init__(
+            numunits.degrees(float(h)),
+            numunits.percent(float(s)),
+            numunits.percent(float(v)),
+            numunits.color_component_rgba(a)
+        )
+
+    h:numunits.degrees
+    s:numunits.percent
+    v:numunits.percent
+    a:numunits.color_component_rgba
+
+    h = group.prop(0)
+    s = group.prop(1)
+    v = group.prop(2)
+    a = group.prop(3)
 
     def to_rgba(self):
         hv = self.h.value
@@ -1770,12 +2123,31 @@ class _color_hsva(_color):
 
 
 class _color_cmyka(_color):
+
+    N = 5
+    NAMES = "cyan", "magenta", "yellow", "key", "alpha"
+    TYPES = numunits.color_component_cmyk, numunits.color_component_cmyk, numunits.color_component_cmyk, numunits.color_component_cmyk, numunits.color_component_rgba
+
     def __init__(self, c:int, m:int, y:int, k:int, a:int=numunits.color_component_rgba.UPPER):
-        self.c = numunits.color_component_cmyk(c)
-        self.m = numunits.color_component_cmyk(m)
-        self.y = numunits.color_component_cmyk(y)
-        self.k = numunits.color_component_cmyk(k)
-        self.a = numunits.color_component_rgba(a)
+        super().__init__(
+            numunits.color_component_cmyk(c),
+            numunits.color_component_cmyk(m),
+            numunits.color_component_cmyk(y),
+            numunits.color_component_cmyk(k),
+            numunits.color_component_rgba(a)
+        )
+
+    c:numunits.color_component_cmyk
+    m:numunits.color_component_cmyk
+    y:numunits.color_component_cmyk
+    k:numunits.color_component_cmyk
+    a:numunits.color_component_rgba
+
+    c = group.prop(0)
+    m = group.prop(1)
+    y = group.prop(2)
+    k = group.prop(3)
+    a = group.prop(4)
 
     def to_rgba(self):
         kcomp = 1 - int(self.k)
@@ -1822,7 +2194,6 @@ class _ColorBaseType(ScriptDataType[_color]):
     for cname in _color_name.NAME_MAP.keys():
         attrs.type_entry(cname).readonly(_typeattr_named_color(cname))
     del cname #make sure this isn't kept as a class attribute
-    attrs.entry("length").readonly(lambda o,n: script.wrap_python_value(len(o.inner._to_this())))
 
 
 _ColorNameTypeAttrs = utils.ScriptAttributeHandler[_color_name, Any](_ColorBaseTypeAttrs)
@@ -1832,7 +2203,7 @@ class _ColorNameType(ScriptDataType[_color_name]):
 
     f_construct = construct = utils.ScriptFunction()
 
-    attrs = _ColorNameTypeAttrs
+    attrs = _color_name.setup(_ColorNameTypeAttrs)
 
     def repr(self, value):
         return script.ScriptValue(String, f"{self.name}({value.inner.name})")
@@ -1847,11 +2218,11 @@ class _ColorRGBType(ScriptDataType[_color_rgba]):
 
     f_construct = construct = utils.ScriptFunction()
 
-    attrs = _ColorRGBTypeAttrs
-    attrs.entry("r","red").readonly(utils.SimpleGetAttribute("r"))
-    attrs.entry("g","green").readonly(utils.SimpleGetAttribute("g"))
-    attrs.entry("b","blue").readonly(utils.SimpleGetAttribute("b"))
-    attrs.entry("a","alpha").readonly(utils.SimpleGetAttribute("a"))
+    attrs = _color_rgba.setup(_ColorRGBTypeAttrs)
+    attrs.alias(attrs["red"], "r").readonly(utils.SimpleGetAttribute("r"))
+    attrs.alias(attrs["green"], "g").readonly(utils.SimpleGetAttribute("g"))
+    attrs.alias(attrs["blue"], "b").readonly(utils.SimpleGetAttribute("b"))
+    attrs.alias(attrs["alpha"], "a").readonly(utils.SimpleGetAttribute("a"))
 
     def repr(self, value):
         return script.ScriptValue(String, f"{self.name}({int(value.inner.r)}, {int(value.inner.g)}, {int(value.inner.b)}, alpha={int(value.inner.a)})")
@@ -1863,11 +2234,11 @@ class _ColorHSLType(ScriptDataType[_color_hsla]):
 
     f_construct = construct = utils.ScriptFunction()
 
-    attrs = _ColorHSLTypeAttrs
-    attrs.entry("h","hue").readonly(utils.SimpleGetAttribute("h"))
-    attrs.entry("s","saturation").readonly(utils.SimpleGetAttribute("s"))
-    attrs.entry("l","lightness").readonly(utils.SimpleGetAttribute("l"))
-    attrs.entry("a","alpha").readonly(utils.SimpleGetAttribute("a"))
+    attrs = _color_hsla.setup(_ColorHSLTypeAttrs)
+    attrs.alias(attrs["hue"], "h").readonly(utils.SimpleGetAttribute("h"))
+    attrs.alias(attrs["saturation"], "s").readonly(utils.SimpleGetAttribute("s"))
+    attrs.alias(attrs["lightness"], "l").readonly(utils.SimpleGetAttribute("l"))
+    attrs.alias(attrs["alpha"], "a").readonly(utils.SimpleGetAttribute("a"))
 
     def repr(self, value):
         return script.ScriptValue(String, f"{self.name}({round(value.inner.h.value, 12)}°, {round(float(value.inner.s)*100, 12)}%, {round(float(value.inner.l)*100, 12)}%, alpha={int(value.inner.a)})")
@@ -1879,11 +2250,11 @@ class _ColorHSVType(ScriptDataType[_color_hsva]):
 
     f_construct = construct = utils.ScriptFunction()
 
-    attrs = _ColorHSVTypeAttrs
-    attrs.entry("h","hue").readonly(utils.SimpleGetAttribute("h"))
-    attrs.entry("s","saturation").readonly(utils.SimpleGetAttribute("s"))
-    attrs.entry("v","value").readonly(utils.SimpleGetAttribute("v"))
-    attrs.entry("a","alpha").readonly(utils.SimpleGetAttribute("a"))
+    attrs = _color_hsva.setup(_ColorHSVTypeAttrs)
+    attrs.alias(attrs["hue"], "h").readonly(utils.SimpleGetAttribute("h"))
+    attrs.alias(attrs["saturation"], "s").readonly(utils.SimpleGetAttribute("s"))
+    attrs.alias(attrs["value"], "v").readonly(utils.SimpleGetAttribute("v"))
+    attrs.alias(attrs["alpha"], "a").readonly(utils.SimpleGetAttribute("a"))
 
     def repr(self, value):
         return script.ScriptValue(String, f"{self.name}({round(value.inner.h.value, 12)}°, {round(float(value.inner.s)*100, 12)}%, {round(float(value.inner.v)*100, 12)}%, alpha={int(value.inner.a)})")
@@ -1895,12 +2266,12 @@ class _ColorCMYKType(ScriptDataType[_color_cmyka]):
 
     f_construct = construct = utils.ScriptFunction()
 
-    attrs = _ColorCMYKTypeAttrs
-    attrs.entry("c","cyan").readonly(utils.SimpleGetAttribute("c"))
-    attrs.entry("m","magenta").readonly(utils.SimpleGetAttribute("m"))
-    attrs.entry("y","yellow").readonly(utils.SimpleGetAttribute("y"))
-    attrs.entry("k","key","b","black").readonly(utils.SimpleGetAttribute("k"))
-    attrs.entry("a","alpha").readonly(utils.SimpleGetAttribute("a"))
+    attrs = _color_cmyka.setup(_ColorCMYKTypeAttrs)
+    attrs.alias(attrs["cyan"], "c").readonly(utils.SimpleGetAttribute("c"))
+    attrs.alias(attrs["magenta"], "m").readonly(utils.SimpleGetAttribute("m"))
+    attrs.alias(attrs["yellow"], "y").readonly(utils.SimpleGetAttribute("y"))
+    attrs.alias(attrs["key"], "k", "b", "black").readonly(utils.SimpleGetAttribute("k"))
+    attrs.alias(attrs["alpha"], "a").readonly(utils.SimpleGetAttribute("a"))
 
     def repr(self, value):
         return script.ScriptValue(String, f"{self.name}({int(value.inner.c)}, {int(value.inner.m)}, {int(value.inner.y)}, {int(value.inner.k)}, alpha={int(value.inner.a)})")
@@ -2229,13 +2600,15 @@ String = _StringType("str", str, BASE_TYPE)
 Bool = _BoolType("bool", bool, BASE_TYPE)
 NullType = _NullType("nulltype", type(None), BASE_TYPE)
 NamePair = _NameValuePairType("namepair", ScriptNameValuePair, BASE_TYPE)
-Pair = _PairType("pair", _pair, BASE_TYPE)
+Group = _GroupType("group", group, BASE_TYPE)
+Pair = _PairType("pair", _pair, Group)
 List = _ListType("list", list, BASE_TYPE)
 Map = _MapType("map", dict, BASE_TYPE)
 MapItem = pair_alias_subtype("map_item", ["key"], ["value"], _map_item_pair)
 List_readonly = _ListReadonlyType("readonly_list", _rolist_wrapper, List)
 Map_readonly = _MapReadonlyType("readonly_map", _rodict_wrapper, Map)
 Iterator = _IteratorType("iterator", _iterator, Integer)
+NullIterator = _NullIteratorType("null_iterator", _null_iterator, Iterator)
 RangeIterator = _RangeIteratorType("range_iterator", _range_iterator, Iterator)
 IterableIterator = _IterableIteratorType("iterable_iterator", _iterable_iterator, Iterator)
 IteratorIterator = _IteratorIteratorType("iterator_iterator", _iterator_iterator, Iterator)
@@ -2281,7 +2654,7 @@ false = script.ScriptValue(Bool, False)
 PI = script.ScriptValue(Float, math.pi)
 
 _builtin_types:list[ScriptDataType] = [
-    Type, TypeAnnotation, Float, Integer, String, Bool, NamePair, Pair, List, Map, UUID, Datetime,
+    Type, TypeAnnotation, Float, Integer, String, Bool, NamePair, Group, Pair, List, Map, UUID, Datetime,
     File, Nanoseconds, Microseconds, Milliseconds, Seconds, Minutes, Hours, Weeks,
     Days, Percent, Degrees, Radians, FunctionParameter, Color, ColorRGB, ColorHSL, ColorHSV,
     ColorCMYK, NamedColor
@@ -2360,6 +2733,42 @@ def bool_construct(self, value:ScriptVariable):
 @_NameValuePairType.f_construct.overload(("name", String), ("value", AnyType))
 def nvpair_construct(self, name:ScriptVariable[str], value:ScriptVariable):
     return script.ScriptValue(self, ScriptNameValuePair(name.get().inner, value.get().inner))
+
+@_GroupType.f_construct.overload(dict(name="values", dtypes=[AnyType, NamePair], pack=True))
+def group_construct(self:ScriptDataType[group], *values:ScriptVariable):
+    if not values:
+        ...
+    vs = []
+    names = []
+    no_names = True
+    for value in values:
+        v = value.get()
+        if v.type.issubtype(NamePair):
+            x = v.inner
+            assert isinstance(x, script.ScriptNameValuePair)
+            names.append(x.name)
+            vs.append(x.value)
+            if no_names:
+                no_names = False
+        else:
+            names.append(None)
+            vs.append(v.inner)
+    
+    if no_names:
+        names = None
+    else:
+        names = tuple(names)
+
+    class _dynamic_group(self.inner):
+        N = len(values)
+        NAMES = names
+        TYPES = None
+
+    dt = script.wrap_python_type(_dynamic_group, override_names="dynamic_group")
+    dtt = type(dt)
+    dtt.attrs = _dynamic_group.setup(dtt.attrs)
+    return script.wrap_python_value(_dynamic_group(*vs))
+
 
 @_PairType.f_construct.overload(("first", AnyType), ("second", AnyType))
 def pair_construct(self, first:ScriptVariable, second:ScriptVariable):
@@ -2675,7 +3084,7 @@ _color_fmap = dict(
     cmyka=_cmyk_construct,
 )
 @_ColorBaseType.f_construct.overload(("formatted", String))
-def Color_construct(self:ScriptDataType[_color], formatted:ScriptVariable[str]):
+def Color_construct_parse(self:ScriptDataType[_color], formatted:ScriptVariable[str]):
     fs = formatted.get().inner.strip().lower()
     startp = fs.find("(")
     if startp != -1:
@@ -2745,6 +3154,10 @@ def ColorRGB_construct(self, red:script.ScriptVariable, green:script.ScriptVaria
     a = _resolve_color_component(alpha, numunits.color_component_rgba)
     return script.wrap_python_value(_color_rgba(r, g, b, a))
 
+@_ColorRGBType.f_construct.overload(("c", Color))
+def ColorRGB_construct_convert(self:ScriptDataType[_color_rgba], c:ScriptVariable[_color]):
+    return script.wrap_python_value(self.inner(*c.get().inner._to_that(self.inner)))
+
 @_ColorHSLType.f_construct.overload(("hue", [Integer, Float, Degrees, Radians, Percent]), ("saturation", [Integer, Float, Percent]), ("lightness", [Integer, Float, Percent]), ("alpha", WholeNumber(), numunits.color_component_rgba.UPPER))
 def ColorHSL_construct(self, hue:ScriptVariable[int|float|numunits.degrees|numunits.radians|numunits.percent], saturation:ScriptVariable[int|float|numunits.percent], lightness:ScriptVariable[int|float|numunits.percent], alpha:ScriptVariable):
     h = hue.get()
@@ -2755,6 +3168,10 @@ def ColorHSL_construct(self, hue:ScriptVariable[int|float|numunits.degrees|numun
     else:
         hd = float(h.inner)
     return script.wrap_python_value(_color_hsla(hd, saturation.get().inner, lightness.get().inner, alpha.get().inner))
+
+@_ColorHSLType.f_construct.overload(("c", Color))
+def ColorHSL_construct_convert(self:ScriptDataType[_color_hsla], c:ScriptVariable[_color]):
+    return script.wrap_python_value(self.inner(*c.get().inner._to_that(self.inner)))
 
 @_ColorHSVType.f_construct.overload(("hue", [Integer, Float, Degrees, Radians, Percent]), ("saturation", [Integer, Float, Percent]), ("value", [Integer, Float, Percent]), ("alpha", WholeNumber(), numunits.color_component_rgba.UPPER))
 def ColorHSV_construct(self, hue:ScriptVariable[int|float|numunits.degrees|numunits.radians|numunits.percent], saturation:ScriptVariable[int|float|numunits.percent], value:ScriptVariable[int|float|numunits.percent], alpha:ScriptVariable):
@@ -2767,6 +3184,10 @@ def ColorHSV_construct(self, hue:ScriptVariable[int|float|numunits.degrees|numun
         hd = float(h.inner)
     return script.wrap_python_value(_color_hsla(hd, saturation.get().inner, value.get().inner, alpha.get().inner))
 
+@_ColorHSVType.f_construct.overload(("c", Color))
+def ColorHSV_construct_convert(self:ScriptDataType[_color_hsva], c:ScriptVariable[_color]):
+    return script.wrap_python_value(self.inner(*c.get().inner._to_that(self.inner)))
+
 @_ColorCMYKType.f_construct.overload(("cyan", [WholeNumber(), Percent]), ("magenta", [WholeNumber(), Percent]), ("yellow", [WholeNumber(), Percent]), ("key", [WholeNumber(), Percent]), ("alpha", [WholeNumber(), Percent], numunits.color_component_rgba.UPPER))
 def ColorCMYK_construct(self, cyan:ScriptVariable, magenta:ScriptVariable, yellow:ScriptVariable, key:ScriptVariable, alpha:ScriptVariable):
     c = _resolve_color_component(cyan, numunits.color_component_cmyk)
@@ -2775,6 +3196,10 @@ def ColorCMYK_construct(self, cyan:ScriptVariable, magenta:ScriptVariable, yello
     k = _resolve_color_component(key, numunits.color_component_cmyk)
     a = _resolve_color_component(alpha, numunits.color_component_rgba)
     return script.wrap_python_value(_color_cmyka(c, m, y, k, a))
+
+@_ColorCMYKType.f_construct.overload(("c", Color))
+def ColorCMYK_construct_convert(self:ScriptDataType[_color_cmyka], c:ScriptVariable[_color]):
+    return script.wrap_python_value(self.inner(*c.get().inner._to_that(self.inner)))
 
 f_list_from = ScriptFunction()
 f_map_from = ScriptFunction()
@@ -2807,6 +3232,7 @@ f_format = ScriptFunction()
 f_split = ScriptFunction()
 f_join = ScriptFunction()
 f_trim = ScriptFunction()
+f_make = ScriptFunction()
 
 trait_Appendable = utils.ScriptTrait("append", 0, [AnyType], dict(dtypes=[AnyType]))
 trait_Container = utils.ScriptTrait("contains", 0, [AnyType], dict(dtypes=[AnyType]))
@@ -3177,6 +3603,10 @@ def collection_iter_contains(target:ScriptVariable[_collection_iterator], value:
     else:
         return false
 
+@f_iterate_over.overload(("target", NullType), dict(name="sink", dtypes=[AnyType, NamePair], pack=True))
+def null_iterate_over(target:ScriptVariable[None], *sink):
+    return script.wrap_python_value(_null_iterator(0))
+
 _STR_ITERATE_STOP_DEFAULT = sys.maxsize
 @f_iterate_over.overload(("target", String), ("start", Integer, 0), ("stop", Integer, _STR_ITERATE_STOP_DEFAULT), ("step", Integer, 1))
 def str_iterate_over(target:ScriptVariable[str], start:ScriptVariable[int], stop:ScriptVariable[int], step:ScriptVariable[int]):
@@ -3306,6 +3736,8 @@ def function_round():
 def function_format():
     ...
 
+@f_make.overload(("group_format", [GroupOf, ]))
+
 def activate():
     global Trait, List_Of, Map_Of, Pair_Of, Iterator_Of, Not_Type, All_Types, Any_Types, Whole_Number
     if not mimetypes.inited:
@@ -3319,6 +3751,7 @@ def activate():
     utils.add_type(ColorComponentRGBA, constructor=False)
     utils.add_type(ColorComponentCMYK, constructor=False)
     utils.add_type(Iterator, constructor=False)
+    utils.add_type(NullIterator, constructor=False)
     utils.add_type(RangeIterator, constructor=False)
     utils.add_type(IterableIterator, constructor=False)
     utils.add_type(IteratorIterator, constructor=False)
@@ -3385,6 +3818,7 @@ def deactivate():
     utils.remove_type(Map_readonly)
     utils.remove_type(MapItem)
     utils.remove_type(Iterator)
+    utils.remove_type(NullIterator)
     utils.remove_type(RangeIterator)
     utils.remove_type(IterableIterator)
     utils.remove_type(IteratorIterator)
