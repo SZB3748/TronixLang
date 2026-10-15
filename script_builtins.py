@@ -25,10 +25,10 @@ class _TypeType(ScriptDataType[type]):
     attrs.wildcard = utils.ScriptValueAttribute[type,Any,Any]("")\
                             .getter(attrs.handle_type_get).setter(attrs.handle_type_set).deleter(attrs.handle_type_del)\
                             .itemgetter(attrs.handle_type_getitem).itemsetter(attrs.handle_type_setitem).itemdeleter(attrs.handle_type_delitem)
-    attrs.entry("name").readonly(lambda o, n: script.wrap_python_value(script.DATA_TYPE_TABLE[o.inner].name))
+    attrs.entry("name").readonly(lambda o, n: script.wrap_python_value(script.wrap_python_type(o.inner).name))
     
     def repr(self, value):
-        return script.ScriptValue(String, f"<type {script.DATA_TYPE_TABLE[value.inner].name} at {hex(id(value))}>")
+        return script.ScriptValue(String, f"<type {script.wrap_python_type(value.inner).name} at {hex(id(value))}>")
 
 _TypeAnnotationTypeAttrs = utils.ScriptAttributeHandler[ScriptTypeAnnotation,Any](no_subscripting=True)
 @_TypeAnnotationTypeAttrs.enforce_child_attrs()
@@ -1091,7 +1091,61 @@ class IteratorOf(script.ScriptTypeAnnotation):
     
     def format_data(self):
         return " | ".join(script.format_script_type_annotation(t) for t in self._resolve_types())
-    
+
+
+class TypeOf(script.ScriptTypeAnnotation):
+
+    ANNOTATION_NAME = "type_of"
+
+    @classmethod
+    def parse(cls, data:str)->Self:
+        parts = script.split_type_annotation_contents(data, ",|")
+        return cls(*(script.parse_script_type_annotation(part) for part in parts))
+
+    def __init__(self, *types:script.ScriptDataType|script.ScriptTypeAnnotation|type|str):
+        if not types:
+            raise ValueError(f"{self.ANNOTATION_NAME} must be given one or more types or type annotations")
+        self.types = list(types)
+        self._resolved = False
+
+    def _resolve_types(self)->list[ScriptDataType|ScriptTypeAnnotation]:
+        if not self._resolved:
+            for i, t in enumerate(self.types):
+                if isinstance(t, str):
+                    self.types[i] = script.parse_script_type_annotation(t)
+                elif isinstance(t, type):
+                    self.types[i] = script.wrap_python_type(t)
+            self._resolved = True
+        return self.types
+
+    def __eq__(self, other):
+        if isinstance(other, TypeOf):
+            return len(self._resolve_types()) == len(other._resolve_types()) and all(t in other.types for t in self.types)
+        elif isinstance(other, script.ScriptDataType):
+            return other.issubtype(Type)
+        else:
+            return False
+
+    def compare(self, other):
+        if isinstance(other, ScriptValue):
+            if not other.type.issubtype(Type):
+                return False
+            x = other.inner
+        elif not isinstance(other, type):
+            return False
+        else:
+            x = other
+
+        for t in self._resolve_types():
+            if isinstance(t, script.ScriptDataType):
+                if not issubclass(x, t.inner):
+                    return False
+            elif not t.compare(x):
+                return False
+        return True
+
+    def format_data(self):
+        return " | ".join(script.format_script_type_annotation(t) for t in self._resolve_types())
 
 class NotType(script.ScriptTypeAnnotation):
 
@@ -2734,10 +2788,22 @@ def bool_construct(self, value:ScriptVariable):
 def nvpair_construct(self, name:ScriptVariable[str], value:ScriptVariable):
     return script.ScriptValue(self, ScriptNameValuePair(name.get().inner, value.get().inner))
 
+def _create_group_dynamic(parent:type[group], n:int, names:tuple[str,...]|None, types:tuple|None):
+    class _dynamic_group(parent):
+        N = n
+        NAMES = names
+        TYPES = types
+
+    dt = script.wrap_python_type(_dynamic_group, override_names=f"dynamic_group_{hex(hash(_dynamic_group))}")
+    dtt = type(dt)
+    dtt.attrs = _dynamic_group.setup(dtt.attrs)
+    return dt
+
 @_GroupType.f_construct.overload(dict(name="values", dtypes=[AnyType, NamePair], pack=True))
 def group_construct(self:ScriptDataType[group], *values:ScriptVariable):
     if not values:
-        ...
+        return script.wrap_python_type(group())
+    
     vs = []
     names = []
     no_names = True
@@ -2759,15 +2825,8 @@ def group_construct(self:ScriptDataType[group], *values:ScriptVariable):
     else:
         names = tuple(names)
 
-    class _dynamic_group(self.inner):
-        N = len(values)
-        NAMES = names
-        TYPES = None
-
-    dt = script.wrap_python_type(_dynamic_group, override_names="dynamic_group")
-    dtt = type(dt)
-    dtt.attrs = _dynamic_group.setup(dtt.attrs)
-    return script.wrap_python_value(_dynamic_group(*vs))
+    dt = _create_group_dynamic(self.inner, len(values), names, None)
+    return script.wrap_python_value(dt.inner(*vs))
 
 
 @_PairType.f_construct.overload(("first", AnyType), ("second", AnyType))
@@ -2890,7 +2949,7 @@ _FUNC_PARAM_NO_DEFAULT = object()
 def FunctionParameter_construct(self:ScriptDataType[utils.ScriptFunctionParam], name:ScriptVariable[str], data_types:ScriptVariable[type|ScriptTypeAnnotation|str|list[type|ScriptTypeAnnotation|str]], default:ScriptVariable, pack:ScriptVariable[bool]):
     dtv = data_types.get()
     if dtv.type.issubtype(List):
-        dts = [script.DATA_TYPE_TABLE[dt] if isinstance(dt, type) else dt for dt in dtv.inner]
+        dts = [script.wrap_python_type(dt) if isinstance(dt, type) else dt for dt in dtv.inner]
     elif dtv.type.issubtype(Type):
         dts = []
     else:
@@ -3322,7 +3381,7 @@ async def map_from_iterator(target:ScriptVariable[_iterator[_pair|ScriptNameValu
 
 @f_is.overload(("value", [AnyType,NamePair]), ("type", Type))
 def function_is(value:ScriptVariable, t:ScriptVariable[type]):
-    return ScriptValue(Bool, value.type().issubtype(script.DATA_TYPE_TABLE[t.get().inner]))
+    return ScriptValue(Bool, value.type().issubtype(script.wrap_python_type(t.get().inner)))
 
 @f_is.overload(("value", [AnyType,NamePair]), ("type", TypeAnnotation))
 def function_is_annotation(value:ScriptVariable, t:ScriptVariable[ScriptTypeAnnotation]):
@@ -3347,7 +3406,7 @@ def function_has(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.JsonPro
     else:
         data = node.get().inner.resolve()
     if not isinstance(data, dict):
-        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {script.wrap_python_type(type(data)).name}")
     return ScriptValue(Bool, name.get().inner in data)
 
 @f_has.overload(("node", [JsonNode, JsonProxyRoot]), dict(name="names", dtypes=[String], pack=True))
@@ -3357,7 +3416,7 @@ def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.
     else:
         data = node.get().inner.resolve()
     if not isinstance(data, dict):
-        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {script.wrap_python_type(type(data)).name}")
     return ScriptValue(List, [name.get().inner in data for name in names])
 
 @f_has.overload(("node", [JsonNode, JsonProxyRoot]), ("names", List))
@@ -3367,7 +3426,7 @@ def function_has_plural(node:ScriptVariable[json_proxy.JsonProxyNode|json_proxy.
     else:
         data = node.get().inner.resolve()
     if not isinstance(data, dict):
-        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {DATA_TYPE_TABLE[type(data)].name}")
+        raise exceptions.TRTypeError(f"expected node data to be of type {Map.name}, but got {script.wrap_python_type(type(data)).name}")
     return ScriptValue(List, [name in data for name in names])
 
 @f_hasfunc.overload(("name", String), pass_ctx=True)
@@ -3736,81 +3795,157 @@ def function_round():
 def function_format():
     ...
 
-@f_make.overload(("group_format", [GroupOf, ]))
+@f_make.overload(("_group_format", GroupOf), dict(name="values", dtypes=[AnyType, NamePair], pack=True))
+def make_group_anno(_group_format:ScriptVariable[GroupOf], *values:ScriptVariable):
+    gf = _group_format.get().inner
 
+    vs = []
+    names = []
+    no_names = True
+    types = gf._resolve_types()
+    if len(values) < len(types):
+        raise exceptions.TRBadValue(f"Group expected at least {len(types)} values but got {len(values)}")
+    for i, v in enumerate(values):
+        x = v.get()
+        if x.type.issubtype(NamePair):
+            assert isinstance(x.inner, script.ScriptNameValuePair)
+            name = x.inner.name
+            if no_names:
+                no_names = False
+            x = script.wrap_python_value(x.inner.value)
+        else:
+            name = None
+        if not (i >= len(types) or x.isinstance(t:=types[i])):
+            raise exceptions.TRTypeError(f"Value {i+1}{"" if name is None else f" (named {name})"} was expected to be {script.format_script_type_annotation(t)} but got value of type {x.type.name}")
+        names.append(name)
+        vs.append(x.inner)
+
+    if no_names:
+        names = None
+    else:
+        names = tuple(names)
+
+    dt = _create_group_dynamic(group, len(values), names, types)
+    return script.wrap_python_value(dt.inner(*vs))
+
+@f_make.overload(("_group_format", TypeOf(Group)), dict(name="values", dtypes=[AnyType, NamePair], pack=True))
+def make_group(_group_format:ScriptVariable[type[group]], *values:ScriptVariable):
+    gf = _group_format.get().inner
+
+    vs:dict[int] = {}
+    j = 0
+    for i, v in enumerate(values):
+        x = v.get()
+        if x.type.issubtype(NamePair):
+            assert isinstance(x.inner, script.ScriptNameValuePair)
+            name = x.inner.name
+            if gf.NAMES is None:
+                raise exceptions.TRBadValue(f"Value {i+1} was given a name but {script.wrap_python_type(gf).name} has no named components")
+            try:
+                assign_i = gf._resolve_name(gf, name)
+            except KeyError:
+                raise exceptions.TRBadValue(f"Value {i+1} was given the name {name} but {script.wrap_python_type(gf).name} has no component with that name")
+            x = script.wrap_python_value(x.inner.value)
+        else:
+            name = None
+            while j in vs:
+                j += 1
+            assign_i = j
+
+        if not (gf.TYPES is None or assign_i >= len(gf.TYPES) or x.isinstance(t:=gf.TYPES[assign_i])):
+            raise exceptions.TRTypeError(f"Value {i+1}{"" if name is None else f" (named {name})"} was expected to be {script.format_script_type_annotation(t)} but got value of type {x.type.name}")
+
+        vs[assign_i] = x.inner
+
+    assert len(vs) <= len(values), "Values are not being properly ordered to create group"
+
+    if not (gf.N is None or gf.N == len(vs)):
+        raise exceptions.TRBadValue(f"Expected exactly {gf.N} values but got {len(vs)}{"" if len(vs) == len(values) else f" (from {len(values)} passed values)"}")
+
+    vlist = []
+    for index in range(len(vs)):
+        assert index in vs, "Group NAMES are not defined properly"
+        vlist.append(vs[index])
+
+    return script.wrap_python_value(gf(*vlist))
+    
 def activate():
-    global Trait, List_Of, Map_Of, Pair_Of, Iterator_Of, Not_Type, All_Types, Any_Types, Whole_Number
+    global Trait, List_Of, Map_Of, Pair_Of, Iterator_Of, Group_Of, Type_Of, Not_Type, All_Types, Any_Types, Whole_Number
     if not mimetypes.inited:
         mimetypes.init()
-    script.DATA_TYPE_TABLE[type] = Type
-    script.DATA_TYPE_TABLE[NullType.inner] = NullType.init()
-    script.DATA_TYPE_TABLE[List_readonly.inner] = List_readonly.init()
-    script.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly.init()
-    utils.DATA_TYPE_TABLE[MapItem.inner] = MapItem.init()
-    utils.add_type(ColorComponent, constructor=False)
-    utils.add_type(ColorComponentRGBA, constructor=False)
-    utils.add_type(ColorComponentCMYK, constructor=False)
-    utils.add_type(Iterator, constructor=False)
-    utils.add_type(NullIterator, constructor=False)
-    utils.add_type(RangeIterator, constructor=False)
-    utils.add_type(IterableIterator, constructor=False)
-    utils.add_type(IteratorIterator, constructor=False)
-    utils.add_type(CollectionIterator, constructor=False)
-    utils.add_type(SequenceIterator, constructor=False)
-    utils.add_type(Duration, constructor=False)
-    utils.add_type(ComplexDuration, constructor=False)
-    for dt in _builtin_types:
-        utils.add_type(dt)
-    utils.add_type(JsonProxyRoot, constructor=False)
-    utils.add_type(JsonNode, constructor=False)
-    Trait = utils.add_python_type(utils.ScriptTrait, override_names=utils.ScriptTrait.ANNOTATION_NAME)
-    List_Of = utils.add_python_type(ListOf, override_names=ListOf.ANNOTATION_NAME)
-    Map_Of = utils.add_python_type(MapOf, override_names=MapOf.ANNOTATION_NAME)
-    Pair_Of = utils.add_python_type(PairOf, override_names=PairOf.ANNOTATION_NAME)
-    Iterator_Of = utils.add_python_type(IteratorOf, override_names=IteratorOf.ANNOTATION_NAME)
-    Not_Type = utils.add_python_type(NotType, override_names=NotType.ANNOTATION_NAME)
-    All_Types = utils.add_python_type(AllTypes, override_names=AllTypes.ANNOTATION_NAME)
-    Any_Types = utils.add_python_type(AnyTypes, override_names=AnyTypes.ANNOTATION_NAME)
-    Whole_Number = utils.add_python_type(WholeNumber, override_names=WholeNumber.ANNOTATION_NAME)
+    with script.ScriptEnvironment.get_current() as env:
+        env.DATA_TYPE_TABLE[type] = Type
+        env.DATA_TYPE_TABLE[NullType.inner] = NullType.init()
+        env.DATA_TYPE_TABLE[List_readonly.inner] = List_readonly.init()
+        env.DATA_TYPE_TABLE[Map_readonly.inner] = Map_readonly.init()
+        env.DATA_TYPE_TABLE[MapItem.inner] = MapItem.init()
+        utils.add_type(ColorComponent, constructor=False)
+        utils.add_type(ColorComponentRGBA, constructor=False)
+        utils.add_type(ColorComponentCMYK, constructor=False)
+        utils.add_type(Iterator, constructor=False)
+        utils.add_type(NullIterator, constructor=False)
+        utils.add_type(RangeIterator, constructor=False)
+        utils.add_type(IterableIterator, constructor=False)
+        utils.add_type(IteratorIterator, constructor=False)
+        utils.add_type(CollectionIterator, constructor=False)
+        utils.add_type(SequenceIterator, constructor=False)
+        utils.add_type(Duration, constructor=False)
+        utils.add_type(ComplexDuration, constructor=False)
+        for dt in _builtin_types:
+            utils.add_type(dt)
+        utils.add_type(JsonProxyRoot, constructor=False)
+        utils.add_type(JsonNode, constructor=False)
+        Trait = utils.add_python_type(utils.ScriptTrait, override_names=utils.ScriptTrait.ANNOTATION_NAME)
+        List_Of = utils.add_python_type(ListOf, override_names=ListOf.ANNOTATION_NAME)
+        Map_Of = utils.add_python_type(MapOf, override_names=MapOf.ANNOTATION_NAME)
+        Pair_Of = utils.add_python_type(PairOf, override_names=PairOf.ANNOTATION_NAME)
+        Iterator_Of = utils.add_python_type(IteratorOf, override_names=IteratorOf.ANNOTATION_NAME)
+        Group_Of = utils.add_python_type(GroupOf, override_names=GroupOf.ANNOTATION_NAME)
+        Type_Of = utils.add_python_type(TypeOf, override_names=TypeOf.ANNOTATION_NAME)
+        Not_Type = utils.add_python_type(NotType, override_names=NotType.ANNOTATION_NAME)
+        All_Types = utils.add_python_type(AllTypes, override_names=AllTypes.ANNOTATION_NAME)
+        Any_Types = utils.add_python_type(AnyTypes, override_names=AnyTypes.ANNOTATION_NAME)
+        Whole_Number = utils.add_python_type(WholeNumber, override_names=WholeNumber.ANNOTATION_NAME)
 
-    add_read_behavior("application/json", _read_file_json)
-    add_write_behavior("application/json", _write_file_json)
+        add_read_behavior("application/json", _read_file_json)
+        add_write_behavior("application/json", _write_file_json)
 
-    utils.merge_function("list_from", f_list_from)
-    utils.merge_function("map_from", f_map_from)
-    utils.merge_function("is", f_is)
-    utils.merge_function("issubtype", f_issubtype)
-    utils.merge_function("has", f_has)
-    utils.merge_function("hasfunc", f_hasfunc)
-    utils.merge_function("print", f_print)
-    utils.merge_function("error", f_error)
-    utils.merge_function("flush", f_flush)
-    utils.merge_function("wait", f_wait)
-    utils.merge_function("format_json", f_format_json)
-    utils.merge_function("parse_json", f_parse_json)
-    utils.merge_function("read", f_read)
-    utils.merge_function("write", f_write)
-    trait_Appendable.merge_function(f_append)
-    trait_CanFind.merge_function(f_find)
-    trait_Container.merge_function(f_contains)
-    trait_Iterable.merge_function(f_iterate_over)
-    utils.merge_function("iterate_over_range", f_iterate_over_range)
-    utils.merge_function("get", f_get)
-    utils.merge_function("next", f_next)
-    utils.merge_function("reset", f_reset)
-    trait_CanDelete.merge_function(f_delete)
-    utils.merge_function("delete_attribute", f_delete_attribute)
-    utils.merge_function("now", f_now)
-    trait_Roundable.merge_function(f_round)
-    trait_Formattable.merge_function(f_format)
+        utils.merge_function("list_from", f_list_from)
+        utils.merge_function("map_from", f_map_from)
+        utils.merge_function("is", f_is)
+        utils.merge_function("issubtype", f_issubtype)
+        utils.merge_function("has", f_has)
+        utils.merge_function("hasfunc", f_hasfunc)
+        utils.merge_function("print", f_print)
+        utils.merge_function("error", f_error)
+        utils.merge_function("flush", f_flush)
+        utils.merge_function("wait", f_wait)
+        utils.merge_function("format_json", f_format_json)
+        utils.merge_function("parse_json", f_parse_json)
+        utils.merge_function("read", f_read)
+        utils.merge_function("write", f_write)
+        trait_Appendable.merge_function(f_append)
+        trait_CanFind.merge_function(f_find)
+        trait_Container.merge_function(f_contains)
+        trait_Iterable.merge_function(f_iterate_over)
+        utils.merge_function("iterate_over_range", f_iterate_over_range)
+        utils.merge_function("get", f_get)
+        utils.merge_function("next", f_next)
+        utils.merge_function("reset", f_reset)
+        trait_CanDelete.merge_function(f_delete)
+        utils.merge_function("delete_attribute", f_delete_attribute)
+        utils.merge_function("now", f_now)
+        trait_Roundable.merge_function(f_round)
+        trait_Formattable.merge_function(f_format)
+        utils.merge_function("make", f_make)
 
-    utils.add_global("Appendable", trait_Appendable)
-    utils.add_global("Container", trait_Container)
-    utils.add_global("Iterable", trait_Iterable)
-    utils.add_global("CanFind", trait_CanFind)
-    utils.add_global("CanDelete", trait_CanDelete)
-    utils.add_global("Roundable", trait_Roundable)
-    utils.add_global("Formattable", trait_Formattable)
+        utils.add_global("Appendable", trait_Appendable)
+        utils.add_global("Container", trait_Container)
+        utils.add_global("Iterable", trait_Iterable)
+        utils.add_global("CanFind", trait_CanFind)
+        utils.add_global("CanDelete", trait_CanDelete)
+        utils.add_global("Roundable", trait_Roundable)
+        utils.add_global("Formattable", trait_Formattable)
 
 def deactivate():
     utils.remove_type(NullType)
@@ -3830,12 +3965,16 @@ def deactivate():
         utils.remove_type(dt)
     utils.remove_type(JsonProxyRoot)
     utils.remove_type(JsonNode)
+    utils.remove_type(Trait)
     utils.remove_type(List_Of)
     utils.remove_type(Map_Of)
+    utils.remove_type(Pair_Of)
     utils.remove_type(Iterator_Of)
+    utils.remove_type(Group_Of)
     utils.remove_type(Not_Type)
     utils.remove_type(All_Types)
     utils.remove_type(Any_Types)
+    utils.remove_type(Whole_Number)
 
     remove_read_behavior("application/json", _read_file_json)
     remove_write_behavior("application/json", _write_file_json)
@@ -3867,6 +4006,7 @@ def deactivate():
     utils.remove_function("now", f_now)
     trait_Roundable.remove_function(f_round)
     trait_Formattable.remove_function(f_format)
+    utils.remove_function("make", f_make)
 
     utils.remove_global("Appendable", trait_Appendable)
     utils.remove_global("Container", trait_Container)

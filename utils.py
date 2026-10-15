@@ -2,6 +2,7 @@ from .exceptions import *
 from .script import *
 from . import script
 import asyncio
+import sys
 from typing import AsyncGenerator, AsyncIterable, Generator, Iterable, get_args as t_get_args, get_origin as t_get_origin
 import xml.etree.ElementTree as ET
 import xml.dom.minidom
@@ -27,10 +28,11 @@ def generate_exception_help(s:script.Script, e:TronixException, step:Callable[[]
 def add_type(dt:ScriptDataType, constructor:bool=True, init:bool=True):
     if init:
         dt.init()
-    script.DATA_TYPE_TABLE[dt.inner] = dt
-    if constructor:
-        merge_function(dt.name, dt.construct)
-    script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(script.DATA_TYPE_TABLE[type], dt.inner))
+    with script.ScriptEnvironment.get_current() as env:
+        env.DATA_TYPE_TABLE[dt.inner] = dt
+        if constructor:
+            merge_function(dt.name, dt.construct)
+        env.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(env.DATA_TYPE_TABLE[type], dt.inner))
 
 def add_python_type(t:type, constructor:bool=True, init:bool=True, override_names:str|dict[str,str]|None=None):
     dt = script.wrap_python_type(t, override_names=override_names)
@@ -38,23 +40,26 @@ def add_python_type(t:type, constructor:bool=True, init:bool=True, override_name
         dt.init()
     if constructor:
         merge_function(dt.name, dt.construct)
-    script.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(dt, dt.inner))
+    with script.ScriptEnvironment.get_current() as env:
+        env.SCRIPT_GLOBAL_SCOPE[dt.name] = ScriptVariable(ScriptValue(dt, dt.inner))
     return dt
 
 def remove_type(dt:ScriptDataType):
     if dt is None:
         return
-    if script.DATA_TYPE_TABLE.get(dt.inner,None) is dt:
-        del script.DATA_TYPE_TABLE[dt.inner]
-    if script.SCRIPT_FUNCTION_TABLE.get(dt.name,None) is dt.construct:
-        remove_function(dt.name, dt.construct)
-    var = script.SCRIPT_GLOBAL_SCOPE.get(dt.name,None)
-    if var is not None and var.get().inner is dt.inner:
-        del script.SCRIPT_GLOBAL_SCOPE[dt.name]
+    with script.ScriptEnvironment.get_current() as env:
+        if env.DATA_TYPE_TABLE.get(dt.inner,None) is dt:
+            del env.DATA_TYPE_TABLE[dt.inner]
+        if env.SCRIPT_FUNCTION_TABLE.get(dt.name,None) is dt.construct:
+            remove_function(dt.name, dt.construct)
+        var = env.SCRIPT_GLOBAL_SCOPE.get(dt.name,None)
+        if var is not None and var.get().inner is dt.inner:
+            del env.SCRIPT_GLOBAL_SCOPE[dt.name]
 
 def merge_function(name:str, f:Callable[[ScriptContext], Any], functions:FunctionTable|None=None):
     if functions is None:
-        functions = script.SCRIPT_FUNCTION_TABLE
+        with script.ScriptEnvironment.get_current() as env:
+            functions = env.SCRIPT_FUNCTION_TABLE
     current = functions.get(name, None)
     if current is None:
         functions[name] = f
@@ -79,7 +84,8 @@ def merge_function(name:str, f:Callable[[ScriptContext], Any], functions:Functio
 
 def remove_function(name:str, f:Callable[[ScriptContext], Any]|None=None, functions:FunctionTable|None=None):
     if functions is None:
-        functions = script.SCRIPT_FUNCTION_TABLE
+        with script.ScriptEnvironment.get_current() as env:
+            functions = env.SCRIPT_FUNCTION_TABLE
     if f is None:
         return functions.pop(name, None)
     else:
@@ -128,21 +134,23 @@ def remove_function(name:str, f:Callable[[ScriptContext], Any]|None=None, functi
         return f
 
 def add_global(name:str, value):
-    g = script.SCRIPT_GLOBAL_SCOPE.get(name, None)
-    v = script.wrap_python_value(value)
-    if g is None:
-        script.SCRIPT_GLOBAL_SCOPE[name] = script.ScriptVariable(v)
-    else:
-        g.assign(v)
+    with script.ScriptEnvironment.get_current() as env:
+        g = env.SCRIPT_GLOBAL_SCOPE.get(name, None)
+        v = script.wrap_python_value(value)
+        if g is None:
+            env.SCRIPT_GLOBAL_SCOPE[name] = script.ScriptVariable(v)
+        else:
+            g.assign(v)
 
 def remove_global(name:str, value):
-    g = script.SCRIPT_GLOBAL_SCOPE.get(name, None)
-    if g is None:
-        return
-    if isinstance(value, script.ScriptValue):
-        value = value.inner
-    if g.get().inner == value:
-        script.SCRIPT_GLOBAL_SCOPE.pop(name, None)
+    with script.ScriptEnvironment.get_current() as env:
+        g = env.SCRIPT_GLOBAL_SCOPE.get(name, None)
+        if g is None:
+            return
+        if isinstance(value, script.ScriptValue):
+            value = value.inner
+        if g.get().inner == value:
+            env.SCRIPT_GLOBAL_SCOPE.pop(name, None)
 
 class ScriptRunner:
     def __init__(self):
@@ -582,8 +590,9 @@ def TypedDeleter(ts:type|ScriptDataType|ScriptTypeAnnotation|list[type|ScriptDat
             else:
                 tlist = [t if isinstance(t, (script.ScriptDataType, script.ScriptTypeAnnotation)) else script.wrap_python_type(t) for t in ts]
             if isinstance(n, str):
-                if script.ScriptValue(script.DATA_TYPE_TABLE[str], n).isinstance(*tlist):
-                    return ff(o, n)
+                with script.ScriptEnvironment.get_current() as env:
+                    if script.ScriptValue(env.DATA_TYPE_TABLE[str], n).isinstance(*tlist):
+                        return ff(o, n)
             elif n.get().isinstance(*tlist):
                 return ff(o, n)
             return no_access(o, n)
@@ -607,8 +616,9 @@ def TypedGetter(ts:type|ScriptDataType|ScriptTypeAnnotation|list[type|ScriptData
             else:
                 tlist = [t if isinstance(t, (script.ScriptDataType, script.ScriptTypeAnnotation)) else script.wrap_python_type(t) for t in ts]
             if isinstance(n, str):
-                if script.ScriptValue(script.DATA_TYPE_TABLE[str], n).isinstance(*tlist):
-                    return ff(o, n)
+                with script.ScriptEnvironment.get_current() as env:
+                    if script.ScriptValue(env.DATA_TYPE_TABLE[str], n).isinstance(*tlist):
+                        return ff(o, n)
             elif n.get().isinstance(*tlist):
                 return ff(o, n)
             return no_access(o, n)
@@ -968,7 +978,7 @@ class ScriptAttributeHandler[T,K]:
 _PARAM_NO_DEFAULT = object()
 
 class ScriptFunctionParam:
-    def __init__(self, name:str, dtypes:list[ScriptDataType|ScriptTypeAnnotation|str], default=_PARAM_NO_DEFAULT, pack:bool=False):
+    def __init__(self, name:str, dtypes:list[ScriptDataType|ScriptTypeAnnotation|str|type], default=_PARAM_NO_DEFAULT, pack:bool=False):
         self.name = name
         self.types = dtypes
         self.default = default
@@ -978,6 +988,8 @@ class ScriptFunctionParam:
         for t in self.types:
             if isinstance(t, (script.ScriptDataType, script.ScriptTypeAnnotation)):
                 yield t
+            elif isinstance(t, type):
+                yield script.wrap_python_type(t)
             else:
                 tt = script.parse_script_type_annotation(t)
                 if tt is None:
@@ -1038,7 +1050,8 @@ class ScriptFunctionSignature:
         self.overloads = overloads
 
     def fit(self, args:list[ScriptVariable])->script_function_signature_fit|None:
-        npair = DATA_TYPE_TABLE[script.ScriptNameValuePair]
+        with script.ScriptEnvironment.get_current() as env:
+            npair = env.DATA_TYPE_TABLE[script.ScriptNameValuePair]
         for i, overload in enumerate(self.overloads):
             l = overload.check()-1
             if len(args) < l:
@@ -1115,7 +1128,7 @@ class ScriptFunctionSignature:
 
 ScriptFunctionParam_Like = ScriptFunctionParam|str|tuple[str]|tuple[str, str|ScriptDataType|ScriptTypeAnnotation|type|list[str|ScriptDataType|ScriptTypeAnnotation|type]]|dict[str]
 
-def _resolve_script_function_param_like(param:ScriptFunctionParam_Like, AnyType):
+def _resolve_script_function_param_like(param:ScriptFunctionParam_Like, AnyType, env:ScriptEnvironment):
     if isinstance(param, str):
         param = ScriptFunctionParam(param, [AnyType])
     elif isinstance(param, tuple):
@@ -1124,15 +1137,15 @@ def _resolve_script_function_param_like(param:ScriptFunctionParam_Like, AnyType)
         elif len(param) > 1:
             tp = param[1]
             if isinstance(tp, type):
-                tp = script.DATA_TYPE_TABLE[tp]
-            if isinstance(tp, (str, ScriptDataType, ScriptTypeAnnotation)):
+                tp = env.DATA_TYPE_TABLE.get(tp, tp)
+            if isinstance(tp, (str, type, ScriptDataType, ScriptTypeAnnotation)):
                 param = (param[0], [tp], *param[2:])
             elif isinstance(tp, list):
                 tl = []
                 for v in tp:
                     if isinstance(v, type):
-                        v = script.DATA_TYPE_TABLE[v]
-                    elif not isinstance(v, (str, ScriptDataType, ScriptTypeAnnotation)):
+                        v = env.DATA_TYPE_TABLE.get(v, v)
+                    elif not isinstance(v, (str, type, ScriptDataType, ScriptTypeAnnotation)):
                         raise TypeError(f"script function parameter type union must be made of str, ScriptDataType, ScriptTypeAnnotation, or type, got: {type(v).__name__} {v}")
                     tl.append(v)
                 param = (param[0], tl, *param[2:])
@@ -1173,34 +1186,35 @@ class ScriptFunction[T]:
 
 
     def overload(self, *params:ScriptFunctionParam_Like, auto:bool=False, pass_ctx:bool=False, priority:int|None=None, pass_fit:bool=False):
-        def decor(cb:Callable[..., ScriptValue]):
-            AnyType = script.DATA_TYPE_TABLE[object]
-            if auto:
-                if pass_fit:
-                    raise ValueError("cannot create overload with auto and pass_fit both enabled")
-                plist = []
-                psig = inspect.signature(cb)
-                pp_i = bool(pass_ctx) + int(isinstance(self, BoundScriptFunction)) #skip self and ctx if needed
-                pparams = list(psig.parameters.values())[pp_i:]
-                #TODO make a converter wrapper function that converts the ScriptVariable arguments to the annotated type (unnecessary if all arguments are annotated with ScriptVariable)
-                def _unwrap_to_value(x:ScriptVariable):
-                    return x.get()
-                def _unwrap_to_inner(x:ScriptVariable):
-                    return x.get().inner
-                conversion_cbs:dict[str, Callable[[ScriptVariable], Any]] = {}
-                for plike, pparam in zip(params, pparams):
-                    param = _resolve_script_function_param_like(plike, AnyType)
-                    if pparam.annotation is not inspect._empty:
-                        if pparam.annotation is Any:
-                            ...
-                if len(param) > len(pparam):
-                    for i in range(len(pparam), len(params)):
-                        plist.append(_resolve_script_function_param_like(params[i]))
-            else:
-                plist = []
-                for p in params:
-                    plist.append(_resolve_script_function_param_like(p, AnyType))
-                self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx, pass_fit=pass_fit), cb, priority=priority)
+        def decor[T:Callable[..., ScriptValue]](cb:T):
+            with script.ScriptEnvironment.get_current() as env:
+                AnyType = env.DATA_TYPE_TABLE[object]
+                if auto:
+                    if pass_fit:
+                        raise ValueError("cannot create overload with auto and pass_fit both enabled")
+                    plist = []
+                    psig = inspect.signature(cb)
+                    pp_i = bool(pass_ctx) + int(isinstance(self, BoundScriptFunction)) #skip self and ctx if needed
+                    pparams = list(psig.parameters.values())[pp_i:]
+                    #TODO make a converter wrapper function that converts the ScriptVariable arguments to the annotated type (unnecessary if all arguments are annotated with ScriptVariable)
+                    def _unwrap_to_value(x:ScriptVariable):
+                        return x.get()
+                    def _unwrap_to_inner(x:ScriptVariable):
+                        return x.get().inner
+                    conversion_cbs:dict[str, Callable[[ScriptVariable], Any]] = {}
+                    for plike, pparam in zip(params, pparams):
+                        param = _resolve_script_function_param_like(plike, AnyType, env)
+                        if pparam.annotation is not inspect._empty:
+                            if pparam.annotation is Any:
+                                ...
+                    if len(param) > len(pparam):
+                        for i in range(len(pparam), len(params)):
+                            plist.append(_resolve_script_function_param_like(params[i], AnyType, env))
+                else:
+                    plist = []
+                    for p in params:
+                        plist.append(_resolve_script_function_param_like(p, AnyType, env))
+                    self.add_overload(ScriptFunctionParamSet(plist, pass_ctx=pass_ctx, pass_fit=pass_fit), cb, priority=priority)
             return cb
         return decor
     
@@ -1359,7 +1373,8 @@ class ScriptTrait(script.ScriptTypeAnnotation):
         return True
 
     def compare(self, other):
-        func = script.SCRIPT_FUNCTION_TABLE.get(self.func_name,None)
+        with script.ScriptEnvironment.get_current() as env:
+            func = env.SCRIPT_FUNCTION_TABLE.get(self.func_name,None)
         if not isinstance(func, ScriptFunction):
             return False
         other = script.wrap_python_value(other)
@@ -1478,3 +1493,63 @@ def deserialize_value(value:dict[str]):
 def serialize_value_headless(value, type_str:bool=False):
     v = script.wrap_python_value(value)
     return v.type.serialize(v, type_str=type_str)
+
+_DEFAULT_ENV_CURRENT_CHECKFRAMES = 100
+
+class Environment(script.ScriptEnvironment):
+
+    @classmethod
+    def get_current(cls, checkframes:int=_DEFAULT_ENV_CURRENT_CHECKFRAMES):
+        if checkframes > 0:
+            frame = sys._getframe(0)
+            if frame is not None:
+                for _ in range(int(checkframes)):
+                    frame = frame.f_back
+                    if frame is None:
+                        break
+                    fid = id(frame)
+                    env = cls.TABLE.get(fid, None)
+                    if env is not None:
+                        return env
+        return super().get_current()
+
+    def __init__(self, global_ns:Namespace, types:dict[type,ScriptDataType], functions:FunctionTable, name_to_datatype:dict[str,ScriptDataType], runner:ScriptRunner):
+        super().__init__(global_ns, types, functions, name_to_datatype)
+        self.runner = runner
+
+    def clone(self):
+        new = super().clone()
+        for name, func in new.SCRIPT_FUNCTION_TABLE.items():
+            if isinstance(func, ScriptFunction):
+                new.SCRIPT_FUNCTION_TABLE[name] = nfunc = ScriptFunction()
+                nfunc.signature = ScriptFunctionSignature([
+                    ScriptFunctionParamSet(
+                        [
+                            ScriptFunctionParam(
+                                param.name,
+                                param.types.copy(),
+                                default=param.default,
+                                pack=param.pack
+                            ) for param in pset.params
+                        ],
+                        pass_ctx=pset.pass_ctx,
+                        pass_fit=pset.pass_fit
+                    ) for pset in nfunc.signature.overloads
+                ])
+        new.runner = self.runner
+        return new
+
+class EnvironmentContextBinder:
+    def __init__(self, env:Environment, frame_depth:int=1):
+        self.env = env
+        self.frame_depth = frame_depth
+        self._owner = None
+
+    def __enter__(self):
+        frame = sys._getframe(self.frame_depth)
+        fid = self._owner = id(frame)
+        self.env.bind(fid)
+
+    def __exit__(self, exc_type, exc, tb):
+        self.env.unbind(self._owner)
+        self._owner = None

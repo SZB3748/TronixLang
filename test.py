@@ -72,8 +72,8 @@ SCRIPT_FUNCTION_TABLE["rolist"] = f_rolist
 
 raw = r"""
 g = group(first:1,second:2)
-print(g["first"], g.second)
-g.third = 3
+g2 = make(type(g), 3, 4)
+gt = make(group_of(int, float), 3, 4)
 """
 
 

@@ -1,9 +1,11 @@
 from .import exceptions
 from .parsingnodes import *
 
+import asyncio
 import hashlib
 import inspect
 import re
+import threading
 from typing import Any, Awaitable, Callable, Iterable, Self
 import weakref
 
@@ -112,7 +114,8 @@ def parse_script_type_annotation(s:str):
         t = name_to_type(name)
         if t is None:
             if name == "null":
-                return DATA_TYPE_TABLE[type(None)]
+                with ScriptEnvironment.get_current() as env:
+                    return env.DATA_TYPE_TABLE[type(None)]
             at = _TYPE_ANNOTATIONS.get(name, None)
             if at is None:
                 raise exceptions.AnnotationUnknownTypeException(f"Unknown type: {name}", type_name=name)
@@ -404,6 +407,56 @@ FunctionTable = dict[str, Callable[[ScriptContext], ScriptValue]]
 SCRIPT_FUNCTION_TABLE:FunctionTable = {}
 SCRIPT_GLOBAL_SCOPE:Namespace = {}
 
+class ScriptEnvironment:
+    @staticmethod
+    def get_owner():
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            return threading.current_thread()
+
+    @classmethod
+    def get_current(cls):
+        return cls.TABLE.get(cls.get_owner(), _DEFAULT_ENV)
+
+    TABLE:weakref.WeakKeyDictionary[Any, Self] = weakref.WeakKeyDictionary()
+
+    def __init__(self, global_ns:Namespace, types:dict[type, ScriptDataType], functions:FunctionTable, name_to_datatype:dict[str, ScriptDataType]):
+        self.SCRIPT_GLOBAL_SCOPE = global_ns
+        self.DATA_TYPE_TABLE = types
+        self.SCRIPT_FUNCTION_TABLE = functions
+        self.name_to_datatype = name_to_datatype
+        self._owner:weakref.ReferenceType[Any]|None = None
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        pass
+
+    def bind(self, owner:Any|None=None):
+        if owner is None:
+            owner = self.get_current()
+        self.unbind()
+        self.TABLE[owner] = self
+        self._owner = weakref.ref()
+
+    def unbind(self):
+        if self._owner is not None:
+            self.TABLE.pop(self._owner(), None)
+            self._owner = None
+
+    def clone(self):
+        cls = type(self)
+        new = cls.__new__(cls)
+        new.SCRIPT_GLOBAL_SCOPE = {name:ScriptVariable(v.get()) for name,v in self.SCRIPT_GLOBAL_SCOPE.items()}
+        new.DATA_TYPE_TABLE = self.DATA_TYPE_TABLE.copy()
+        new.SCRIPT_FUNCTION_TABLE = self.SCRIPT_FUNCTION_TABLE.copy()
+        new.name_to_datatype.copy()
+        new._owner = None
+        return new
+
+
 class _enclose_stack:
     __slots__ = "c", "end", "pnode", "basenode", "r", "prev"
     def __init__(self, c:str, end:str, pnode:ParsingNode, basenode:ParsingNode, r:Match|None=None, prev:Self|None=None):
@@ -633,20 +686,24 @@ DATA_TYPE_TABLE:dict[type, ScriptDataType] = {
 
 _name_to_datatype:dict[str, ScriptDataType] = {}
 
+_DEFAULT_ENV = ScriptEnvironment(SCRIPT_GLOBAL_SCOPE, DATA_TYPE_TABLE, SCRIPT_FUNCTION_TABLE, _name_to_datatype)
+
 def _convert_script_value[T](value:T):
-    t = DATA_TYPE_TABLE.get(type(value), None)
+    with ScriptEnvironment.get_current() as env:
+        t = env.DATA_TYPE_TABLE.get(type(value), None)
     if t is None:
         return None
     return ScriptValue(t, value)
 
 def name_to_type(name:str):
-    t = _name_to_datatype.get(name, None)
-    if t is None:
-        for dt in DATA_TYPE_TABLE.values():
-            _name_to_datatype[dt.name] = dt
-            if dt.name == name:
-                return dt
-    return t
+    with ScriptEnvironment.get_current() as env:
+        t = env.name_to_datatype.get(name, None)
+        if t is None:
+            for dt in env.DATA_TYPE_TABLE.values():
+                env.name_to_datatype[dt.name] = dt
+                if dt.name == name:
+                    return dt
+        return t
 
 def wrap_python_value[T](value:T|ScriptValue[T]):
     if isinstance(value, ScriptValue):
@@ -658,10 +715,10 @@ def wrap_python_value[T](value:T|ScriptValue[T]):
         v = ScriptValue[T](st, value)
     return v
 
-def _resolve_dynamic_type_creation(sup:type, mro:list[type], override_names:dict[str,str]|None)->tuple[ScriptDataType, type[ScriptDataType]]:
-    supt = DATA_TYPE_TABLE.get(sup, None)
+def _resolve_dynamic_type_creation(env:ScriptEnvironment, sup:type, mro:list[type], override_names:dict[str,str]|None)->tuple[ScriptDataType, type[ScriptDataType]]:
+    supt = env.DATA_TYPE_TABLE.get(sup, None)
     if supt is None:
-        parent, super_t = _resolve_dynamic_type_creation(mro[0], mro[1:], override_names)
+        parent, super_t = _resolve_dynamic_type_creation(env, mro[0], mro[1:], override_names)
         class _DynamicScriptDataType(super_t):
             pass
         n = sup.__name__
@@ -669,28 +726,29 @@ def _resolve_dynamic_type_creation(sup:type, mro:list[type], override_names:dict
     else:
         return supt, type(supt)
 
-def wrap_python_type(t:type|ScriptDataType, update_table:bool=True, override_names:str|dict[type,str]|None=None):
+def wrap_python_type[T](t:type[T]|ScriptDataType[T], update_table:bool=True, override_names:str|dict[type,str]|None=None)->ScriptDataType[T]:
     if isinstance(t, ScriptDataType):
         return t
-    st = DATA_TYPE_TABLE.get(t, None)
-    if st is not None:
-        return st
+    with ScriptEnvironment.get_current() as env:
+        st = env.DATA_TYPE_TABLE.get(t, None)
+        if st is not None:
+            return st
 
-    n = t.__name__
-    mro = t.mro()
-    parent, super_t = _resolve_dynamic_type_creation(mro[0], mro[1:], override_names if isinstance(override_names, dict) else None)
-    class _DynamicScriptDataType(super_t):
-        pass
-    st = _DynamicScriptDataType(
-        n if override_names is None else override_names if isinstance(override_names, str) else override_names.get(t, n),
-        t, parent
-    )
+        n = t.__name__
+        mro = t.mro()
+        parent, super_t = _resolve_dynamic_type_creation(env, mro[0], mro[1:], override_names if isinstance(override_names, dict) else None)
+        class _DynamicScriptDataType(super_t):
+            pass
+        st = _DynamicScriptDataType(
+            n if override_names is None else override_names if isinstance(override_names, str) else override_names.get(t, n),
+            t, parent
+        )
 
-    if update_table:
-        DATA_TYPE_TABLE[t] = st.init()
-        return st
-    else:
-        return st.init()
+        if update_table:
+            env.DATA_TYPE_TABLE[t] = st.init()
+            return st
+        else:
+            return st.init()
 
 class Script:
 
@@ -1253,8 +1311,12 @@ class Script:
                         f"function {repr(node.function_name)} is not implemented",
                         ctx=exceptions.ExceptionContext(node, _function_step)
                     ) from e
+                except exceptions.TronixException as e:
+                    if e._ctx is None:
+                        e._set_context(exceptions.ExceptionContext(node, _function_step))
+                    raise
                 except Exception as e:
-                    raise exceptions.wrap(e)
+                    raise exceptions.wrap(e, ctx=exceptions.ExceptionContext(node, _function_step))
                 if value is NotImplemented:
                     raise exceptions.TRNotImplemented(
                         f"function {repr(node.function_name)} is not implemented",
@@ -1482,7 +1544,8 @@ class Script:
                         "value for name-value pair must evaluate but resulted in no value",
                         ctx=exceptions.ExceptionContext(operation.value, _step)
                     )
-                return ScriptValue(DATA_TYPE_TABLE[ScriptNameValuePair], ScriptNameValuePair(operation.name.name, v.inner))
+                with ScriptEnvironment.get_current() as env:
+                    return ScriptValue(env.DATA_TYPE_TABLE[ScriptNameValuePair], ScriptNameValuePair(operation.name.name, v.inner))
             self.steps_debug[_step] = operation.value
             step_eval.cb = _step
             return step_eval
@@ -1521,7 +1584,8 @@ class Script:
                         "value for name-value pair must evaluate but resulted in no value",
                         ctx=exceptions.ExceptionContext(node.value, _step)
                     )
-                return ScriptValue(DATA_TYPE_TABLE[ScriptNameValuePair], ScriptNameValuePair(node.name.name, v.inner))
+                with ScriptEnvironment.get_current() as env:
+                    return ScriptValue(env.DATA_TYPE_TABLE[ScriptNameValuePair], ScriptNameValuePair(node.name.name, v.inner))
             self.steps_debug[_step] = node.value
             return _step
 
@@ -1783,7 +1847,8 @@ class Script:
         async def _step():
             if name is not None:
                 if self.stack.find_name(name) is None:
-                    self.stack.ns[name] = ScriptVariable(ScriptValue(DATA_TYPE_TABLE[type(None)], None))
+                    with ScriptEnvironment.get_current() as env:
+                        self.stack.ns[name] = ScriptVariable(ScriptValue(env.DATA_TYPE_TABLE[type(None)], None))
             return block_stepexp
         
         self.steps_debug[_step] = node
@@ -1797,7 +1862,8 @@ class Script:
         async def _step():
             ns = self.stack.find_name(name)
             if ns is None:
-                target_ns[name] = ScriptVariable(ScriptValue(DATA_TYPE_TABLE[type(None)], None))
+                with ScriptEnvironment.get_current() as env:
+                    target_ns[name] = ScriptVariable(ScriptValue(env.DATA_TYPE_TABLE[type(None)], None))
             elif ns is not target_ns:
                 target_ns[name] = ns.pop(name)
         self.steps_debug[_step] = node
